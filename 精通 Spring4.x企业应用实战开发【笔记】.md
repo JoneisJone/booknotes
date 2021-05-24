@@ -316,7 +316,7 @@ ApplicationContext为应用上下文，面型使用Spring框架的开发者，�
 
  可以被创建和管理java对象，POJO，被Spring称为Bean;
 
-JavaBean需满足一定规范，如提供默认的不带参的构造函数，不依赖于某一特定容器。
+`JavaBean需满足一定规范，如提供默认的不带参的构造函数，不依赖于某一特定容器。`
 
 BeanFactory位于类结构树的顶端，最主要的方法就是getBean(String beanName)，该方法从容器中返回特定的Bean。其功能通过其他接口得到不断扩展
 
