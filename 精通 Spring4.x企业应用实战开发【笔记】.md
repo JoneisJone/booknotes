@@ -377,6 +377,34 @@ ApplicationContext ctx = new ClassPathXmlApplicationContext("com/smart/context/b
 
 BeanFactory和ApplicationContext的区别：BeanFactory在初始化容器时，并未实例化Bean,直到第一次访问某个Bean时才实例化目标Bean；而ApplicationContext则在初始化应用上下文时就实例化所有单实例的Bean.故ApplicationContext初始化时间长，但后续调用没有“第一次惩罚”的问题
 
+### 4.5 Bean的生命周期
+
+看不大明白其实...
+
+找视频学习吧还是
+
+
+
+## 第5章 在IoC容器中装配Bean
+
+Spring启动时是如何和bean对象交互的？
+
+```
+Spring启动时读取应用程序提供的Bean的配置信息，并在Spring容器中生成一份相应的Bean配置注册表，然后根据这张注册表实例化Bean，装配好Bean之间的依赖关系，为上层应用提供准备就绪的运行环境。
+```
+
+1 读取Bean配置信息
+
+2 根据Bean注册表实例化Bean
+
+3 将Bean实例放到Spring容器中
+
+4 使用Bean
+
+
+
+#### 5.1 基于xml的配置
+
 
 
 
