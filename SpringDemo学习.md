@@ -1251,3 +1251,2045 @@ spring.thymeleaf.cache=false
 
 ![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10298timestamp1552982808053.png)
 
+
+
+
+
+## Spring Boot 处理文件上传及路径回显
+
+Spring MVC 文件上传流程
+
+
+
+以往在使用 Spring 的 web 项目开发中，我们通常会使用 Spring MVC 框架提供的文件上传工具类进行文件上传，也就是 **MultipartResolver** ，利用 SpringMVC 实现文件上传功能，离不开对 MultipartResolver 的设置。
+
+MultipartResolver 这个类，你可以将其视为 SpringMVC 实现文件上传功能时的工具类，这个类也只会在文件上传中发挥作用，在配置了具体实现类之后，SpringMVC 中的 DispatcherServlet 在处理请求时会调用 MultipartResolver 中的方法判断此请求是不是文件上传请求，如果是的话 DispatcherServlet 将调用 MultipartResolver 的 `resolveMultipart(request)` 方法对该请求对象进行装饰，并返回一个新的 MultipartHttpServletRequest 供后继处理流程使用。 注意！此时的请求对象会由 HttpServletRequest 类型转换成 MultipartHttpServletRequest 类型，这个类中会包含所上传的文件对象可供后续流程直接使用，而无需自行在代码中实现对文件内容的读取和对象封装的逻辑。
+
+在 Spring Boot 中也是通过该工具类进行文件上传，与普通的 Spring web 项目不同的是，Spring Boot 在自动配置 DispatcherServlet 时也配置好了 MultipartResolver ，而无需再像原来那样在 Spring MVC 配置文件中增加文件上传配置的 bean。
+
+Spring Boot 文件上传功能实现
+
+
+
+这一小节将会通过一个文件上传案例的实现来讲解如何使用 Spring Boot 进行文件上传功能。我们先下载源码，对照代码进行详细学习。
+
+源码下载并解压：
+
+```bash
+wget https://labfile.oss.aliyuncs.com/courses/1367/lou-springboot-06.zip
+unzip lou-springboot-06.zip
+```
+
+切换工作空间到 lou-springboot,完整项目结构如下：
+
+```bash
+lou-springboot
+├── pom.xml
+├── README.md
+└── src
+    ├── main
+    │   ├── java
+    │   │   └── com
+    │   │       └── lou
+    │   │           └── springboot
+    │   │               ├── Application.java
+    │   │               ├── config
+    │   │               │   └── SpringBootWebMvcConfigurer.java
+    │   │               └── controller
+    │   │                   └── UploadController.java
+    │   └── resources
+    │       ├── application.properties
+    │       ├── static
+    │       │   └── upload-test.html
+    │       └── templates
+    └── test
+        └── java
+            └── com
+                └── lou
+                    └── springboot
+                        └── ApplicationTests.java
+```
+
+常用配置
+
+
+
+由于 Spring Boot 自动配置机制的存在，我们并不需要进行多余的设置，只要已经在 pom 文件中引入了 web starter 模块即可直接进行文件上传功能，在前面的实验中我们已经将 web 模块整合到项目中，因此无需再进行整合。虽然不用配置也可以使用文件上传，但是有些开发者可能会在文件上传时有一些特殊的需求，因此也需要对 Spring Boot 中 MultipartFile 的常用设置进行介绍，配置和默认值如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10300timestamp1552983763789.png)
+
+配置含义注释：
+
+- **spring.servlet.multipart.enabled**
+
+  是否支持 **multipart** 上传文件，默认支持
+
+- **spring.servlet.multipart.file-size-threshold**
+
+  **文件大小阈值**，当大于这个阈值时将写入到磁盘，否则存在内存中，（默认值 0 ，一般情况下不用特意修改）
+
+- **spring.servlet.multipart.location**
+
+  **上传文件的临时目录**
+
+- **spring.servlet.multipart.max-file-size**
+
+  **最大支持文件大小**，默认 1 M ，该值可适当的调整
+
+- **spring.servlet.multipart.max-request-size**
+
+  **最大支持请求大小**，默认 10 M
+
+- **spring.servlet.multipart.resolve-lazily**
+
+  判断**是否要延迟解析文件**（相当于懒加载，一般情况下不用特意修改），默认 false
+
+
+
+上传功能实现
+
+
+
+#### 新建文件上传页面
+
+在 static 目录中新建 upload-test.html，上传页面代码如下：
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Spring Boot 文件上传测试</title>
+  </head>
+  <body>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" />
+      <input type="submit" value="文件上传" />
+    </form>
+  </body>
+</html>
+```
+
+这应该是大家都很熟悉的一个文件上传页面 demo ，文件上传的请求地址为 /upload，请求方法为 post，需要注意的是在文件上传时要设置 `enctype="multipart/form-data"`，页面中包含一个文件选择框和一个提交框，如下所示：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid1375timestamp1555655843249.png)
+
+#### 新建文件上传处理 Controller
+
+在 controller 包下新建 UploadController 并编写实际的文件上传逻辑代码，代码如下：
+
+```java
+@Controller
+public class UploadController {
+    // 文件保存路径为 /home/project/upload/ 即当前 project 目录下的 upload 文件夹
+    private final static String FILE_UPLOAD_PATH = "/home/project/upload/";
+    @RequestMapping(value = "/upload", method = RequestMethod.POST)
+    @ResponseBody
+    public String upload(@RequestParam("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            return "上传失败";
+        }
+        String fileName = file.getOriginalFilename();
+        String suffixName = fileName.substring(fileName.lastIndexOf("."));
+        //生成文件名称通用方法
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        Random r = new Random();
+        StringBuilder tempName = new StringBuilder();
+        tempName.append(sdf.format(new Date())).append(r.nextInt(100)).append(suffixName);
+        String newFileName = tempName.toString();
+        try {
+            // 保存文件
+            byte[] bytes = file.getBytes();
+            Path path = Paths.get(FILE_UPLOAD_PATH + newFileName);
+            Files.write(path, bytes);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return "上传成功";
+    }
+}
+```
+
+由于已经自动配置了 MultipartFile ，因此能够直接在控制器方法中使用 MultipartFile 读取文件信息， **@RequestParam**中的文件名称需要与文件上传前端页面设置的 name 属性一致，如果文件为空则返回上传失败，如果不为空则生成一个新的文件名，之后读取文件流并写入到指定的上传路径中，最后返回上传成功。
+
+#### 上传路径
+
+
+
+需要注意的是文件上传路径的设置，我们在代码中设置的文件保存路径为 `/home/project/upload/` 即当前 project 目录下的 upload 文件夹，`/home/project/upload/` 这种写法是 Linux 系统下的路径写法，因为实验楼线上环境的原因我们在代码里使用了这种写法。 如果你本机是 Windows 系统的话，写法与此不同，比如我们想把文件上传到 D 盘下的 upload 文件夹下，就需要把路径设置代码改为
+
+```java
+private final static String FILE_UPLOAD_PATH = "D:\\upload\\"
+```
+
+这一点需要大家注意，两种系统的写法存在一些差异。
+
+回到本节实验中来，如果 project 下没有 upload 目录，你需要在 project 目录下新建 upload 目录，用于存放上传文件，也可以执行 `mkdir /home/project/upload/` 命令来创建 upload 目录。
+
+```bash
+cd ..
+mkdir upload
+```
+
+之后我们启动项目进行文件上传测试。
+
+#### 文件上传功能测试
+
+
+
+打开命令行工具，将工作目录切换到 lou-springboot 目录下，通过 Maven 插件的方式启动 Spring Boot 项目，命令为 `mvn spring-boot:run` ，之后就可以等待项目启动。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10300timestamp1552983804751.png)
+
+启动成功后，打开浏览器并输入测试页面地址 /upload-test.html，之后选择需要上传的文件并进行点击上传按钮，之后可以等待后端业务处理了，如果看到上传成功的提示，并且在 upload 目录中看到保存的新文件文件则表示功能实现成功，如果文件较大可以适当调整配置项的值。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10300timestamp1552983818892.png)
+
+之后我们需要确认文件是否已经上传到服务器上，只需要查看 upload 目录下是否存在该文件即可，结果如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10300timestamp1552983831072.png)
+
+文件上传实验完成！
+
+#### Spring Boot 文件上传路径回显
+
+
+
+网上很多的 Spring Boot 文件上传教程，通常只讲如何实现上传功能，之后就不再继续讲解了，虽然也给了教程和代码，但是正常情况下，我们上传文件是要实际应用到业务中的，比如图片上传，上传后我们需要知道它的路径，最好能够在页面中直接看到它的回显效果，像前一个步骤中，我们只是成功的完成了文件上传，但是如何去访问这个文件还不得而知。Spring Boot 不像普通的 web 项目可以上传到 webapp 指定目录中，通常的做法是**使用自定义静态资源映射目录，以此来实现文件上传整个流程的闭环**，比如前一小节中的实际案例，在文件上传到 upload 目录后，增加一个自定义静态资源映射，使得 upload 下的静态资源可以通过该映射地址被访问到，新建 config 包，并在包中新增 SpringBootWebMvcConfigurer 类，实现方法如下：
+
+```java
+package com.lou.springboot.config;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class SpringBootWebMvcConfigurer implements WebMvcConfigurer {
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+
+        registry.addResourceHandler("/files/**").addResourceLocations("file:/home/project/upload/");
+    }
+}
+```
+
+通过该设置，所有以 /files/ 开头的静态资源请求都会映射到 /home/project/upload 目录下，与前面上传文件时设置目录类似，不同的系统比如 Linux 和 Windows，文件路径的写法不同。
+
+之后修改一下文件上传时的返回信息，把路径拼装并返回到页面上，以便于我们进行测试，代码修改如下：
+
+```java
+return "上传成功，图片地址为：/files/" + newFileName;
+```
+
+接下来我们来测试一下上传的文件能否被访问到，重启项目并进行文件上传，过程如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10300timestamp1552983745253.png)
+
+这样，一个简单的文件上传和回显的案例就完成了，首先将文件上传到指定文件夹中，之后设置静态资源映射规则使得一部分请求返回指定文件夹中的资源进行文件路径回显。
+
+首先对文件上传的流程及功能设计进行了介绍，之后结合实践案例讲解如何使用 Spring Boot 实现文件上传以及如何对已上传的文件进行路径回显，希望通过本实验的讲解，大家都能够掌握如何使用 Spring Boot 进行文件上传，本文演示时都是使用的图片文件，同学们在练习时也可以使用其他格式的文件进行测试，希望大家多多动手练习，以更快的掌握该知识点，后续在图片管理模块实践中我们会继续对该功能进行拓展讲解。
+
+## Spring Boot 自动配置数据源及操作数据库
+
+#### JDBC
+
+JDBC 全称为 Java Data Base Connectivity（Java 数据库连接），主要由接口组成，是一种用于执行 SQL 语句的 Java API。各个数据库厂家基于它各自实现了自己的驱动程序（Driver），如下图所示：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10302timestamp1552984502095.png)
+
+Java 程序在获取数据库连接时，需要以 URL 方式指定不同类型数据库的 Driver，在获得特定的 Connection 连接后，可按照 JDBC 规范对不同类型的数据库进行数据操作，代码如下：
+
+```java
+//第一步，注册驱动程序
+//com.MySQL.jdbc.Driver
+Class.forName("数据库驱动的完整类名");
+//第二步，获取一个数据库的连接
+Connection conn = DriverManager.getConnection("数据库地址","用户名","密码");
+//第三步，创建一个会话
+Statement stmt=conn.createStatement();
+//第四步，执行SQL语句
+stmt.executeUpdate("SQL语句");
+//或者查询记录
+ResultSet rs = stmt.executeQuery("查询记录的SQL语句");
+//第五步，对查询的结果进行处理
+while(rs.next()){
+//操作
+}
+//第六步，关闭连接
+rs.close();
+stmt.close();
+conn.close();
+```
+
+对上面几行代码，大家不会陌生，这是我们初学 JDBC 连接时最熟悉的代码了，虽然现在可能用到了一些数据层 ORM 框架(比如 MyBatis 或者 Hibernate )，但是底层实现依然如同上面代码一样，只不过框架对其做了一些封装而已，通过 JDBC 使得我们可以直接使用 Java 程序来对关系型数据库进行操作，接下来我们将对 Spring Boot 如何使用 JDBC 进行实例演示。
+
+数据库准备
+
+
+
+#### 启动 MySQL
+
+**如果 MySQL 数据库服务没有启动的话需要进行这一步操作。**
+
+进入实验楼线上开发环境，首先打开一个命令窗口，点击 File -> Open New Terminal 即可，之后在命令行中输入以下命令：
+
+```bash
+sudo service mysql start
+```
+
+因为用户权限的关系，需要增加在命令前增加 sudo 取得 root 权限，不然在启动时会报错，之后等待 MySQL 正常启动即可。
+
+#### 创建数据库和表结构
+
+首先，执行如下命令登陆 MySQL 数据库：
+
+```bash
+sudo mysql -u root
+```
+
+因为实验楼线上实验环境中 MySQL 数据库默认并没有设置密码，因此以上命令即可完成登陆。在开发项目之前需要在 MySQL 中先创建数据库和表作为项目演示使用，SQL 语句如下：
+
+```sql
+CREATE DATABASE /*!32312 IF NOT EXISTS*/`lou_springboot` /*!40100 DEFAULT CHARACTER SET utf8 */;
+
+USE `lou_springboot`;
+
+DROP TABLE IF EXISTS `tb_user`;
+
+CREATE TABLE `tb_user` (
+  `id` INT(11) NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `name` VARCHAR(100) NOT NULL DEFAULT '' COMMENT '登录名',
+  `password` VARCHAR(100) NOT NULL DEFAULT '' COMMENT '密码',
+  PRIMARY KEY (`id`)
+) ENGINE=INNODB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8;
+```
+
+首先创建了 lou_springboot 的数据库，之后在数据库中新建了一个名称为 tb_user 的数据表，表中有 id , name , password 三个字段，同学们在测试时可以直接将以上 SQL 拷贝到 MySQL 中执行即可。
+
+执行完上面的操作后，再执行以下操作，就可以看见创建的数据库了
+
+```bash
+show databases;
+```
+
+**希望大家能保存好数据库环境，在后面的实验中还会继续用到这个数据库**
+
+Spring Boot 连接数据库
+
+
+
+源码下载并解压：
+
+```bash
+wget https://labfile.oss.aliyuncs.com/courses/1367/lou-springboot-07.zip
+unzip lou-springboot-07.zip
+```
+
+切换工作空间到 lou-springboot。项目结构目录如下：
+
+```bash
+lou-springboot
+├── pom.xml
+├── README.md
+└── src
+    ├── main
+    │   ├── java
+    │   │   └── com
+    │   │       └── lou
+    │   │           └── springboot
+    │   │               ├── Application.java
+    │   │               └── controller
+    │   │                   ├── HelloController.java
+    │   │                   └── JdbcController.java
+    │   └── resources
+    │       ├── application.properties
+    │       ├── static
+    │       └── templates
+    └── test
+        └── java
+            └── com
+                └── lou
+                    └── springboot
+                        └── ApplicationTests.java
+```
+
+#### pom 依赖
+
+在进行数据库连接前，首先将相关 jar 包依赖引入到项目中，Spring Boot 针对 JDBC 的使用提供了对应的 Starter 包：`spring-boot-starter-jdbc`，方便在 Spring Boot 生态中更好的使用 JDBC，演示项目中使用 MySQL 作为数据库，因此项目中也需要引入 MySQL 驱动包，因此在 pom.xml 文件中新增如下配置：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>2.1.0.RELEASE</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.lou.springboot</groupId>
+    <artifactId>springboot-demo</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>springboot-demo</name>
+    <description>Demo project for Spring Boot</description>
+    <properties>
+        <java.version>1.8</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- jdbc-starter -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <!-- MySQL 驱动包 -->
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+#### 数据库配置信息
+
+为了能够连接上数据库并进行操作，在新增依赖后，我们也需要对数据库的基本信息进行配置，比如数据库地址、账号、密码等信息，这些配置依然是在 `application.properties`文件中增加，配置如下：
+
+```properties
+# datasource config
+spring.datasource.url=jdbc:mysql://localhost:3306/lou_springboot?useUnicode=true&characterEncoding=utf8&autoReconnect=true&useSSL=false
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.datasource.username=root
+spring.datasource.password=
+```
+
+以上为实验楼线上开发环境的配置信息，如果在你本机运行代码，你需要将对应的信息改为正确的配置，接下来就可以进行连接测试了。值得注意的是，在 Spring Boot 2 中，数据库驱动类推荐使用 `com.mysql.cj.jdbc.Driver`，而不是我们平时比较熟悉的 `com.mysql.jdbc.Driver` 类了。
+
+#### 连接测试
+
+最后，我们编写一个测试类来测试一下目前能否获得与数据库的连接，在测试类 ApplicationTests 中添加 datasourceTest() 单元测试方法，源码及注释如下：
+
+```java
+@RunWith(SpringRunner.class)
+@SpringBootTest
+public class ApplicationTests {
+    // 注入数据源对象
+    @Autowired
+    private DataSource dataSource;
+
+    @Test
+    public void datasourceTest() throws SQLException {
+        // 获取数据库连接对象
+        Connection connection = dataSource.getConnection();
+        // 判断连接对象是否为空
+        System.out.println(connection != null);
+        connection.close();
+    }
+}
+```
+
+点击运行单元测试方法，如果 connection 对象不为空，则证明数据库连接成功，如下图所示，在对 connection 对象进行判空操作时，得到的结果是 connection 非空。如果数据库连接对象没有正常获取，则需要检查数据库是否连接或者数据库信息是否配置正确。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10302timestamp1552984528759.png)
+
+由于线上环境的原因，无法像上图一样测试，该测试也只是演示能否获取到数据库连接，后续的实验内容会在实验楼线上环境运行。
+
+至此，Spring Boot 连接数据库的过程就讲解完成了，分别是引入依赖、增加数据库信息配置、注入数据源进行数据库操作。
+
+#### Spring Boot 数据源自动配置
+
+
+
+通过前一小节的演示大家也能够观察到，我们在配置文件中只需要加上数据库的相关信息即可获取到数据库连接对象，那么 Spring Boot 究竟做了哪些自动配置操作使得我们可以如此简单的就直接获取到数据库连接呢？首先，我们来分析一下注入的 DataSource 数据源对象，更改测试类方法如下：
+
+```java
+    @Test
+    public void datasourceTest() throws SQLException {
+        // 获取数据源类型
+        System.out.println("默认数据源为：" + defaultDataSource.getClass());
+    }
+```
+
+运行测试方法，得到的结果为：
+
+```text
+默认数据源为：class com.zaxxer.hikari.HikariDataSource
+```
+
+基于以上结果我们可以得出结论，在项目启动前，Spring Boot 已经默认向 IOC 容器中注册了一个类型为 `HikariDataSource` 的数据源对象，不然我们在使用 `@Autowired` 进行数据源的引入时肯定会报错。 HikariCP 是 Spring Boot 2.0 默认使用的数据库连接池，自动配置类为 `DataSourceAutoConfiguration.class` 和 `DataSourceConfiguration.class` ，感兴趣的同学可以阅读一下源码理解一下数据源自动配置的过程。
+
+Spring Boot 不仅仅是自动配置了 DataSource 对象，在数据源对象自动配置完成后，Spring Boot 也自动配置了 JdbcTemplate 对象，JdbcTemplate 是 Spring 对 JDBC 的封装，目的是使 JDBC 更加易于使用。 Spring Boot 默认也并没有集成相关的 ORM 框架，而是提供了 JdbcTemplate 来简化开发者对于数据库的操作，关于 ORM 框架集成到 Spring Boot 项目中的教程我会在后续实验中演示，接下来我们使用 JdbcTemplate 来进行数据库的常用 SQL 操作。
+
+Spring Boot 操作 MySQL
+
+
+
+**新建 JdbcController：**
+
+在正确配置数据源之后，开发者可以直接在代码中使用 JdbcTemplate 对象进行数据库操作，接下来就是代码实践了，为了演示方便，我们直接新建一个 Controller 类，并注入 JdbcTemplate 对象，接下来我们创建两个方法，一个是查询 tb_user 中的数据，另一个方法是根据传入的参数向 tb_user 表中新增数据，代码如下：
+
+```java
+package com.lou.springboot.controller;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+public class JdbcController {
+
+    //自动配置，因此可以直接通过 @Autowired 注入进来
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
+    // 查询所有记录
+    @GetMapping("/users/queryAll")
+    public List<Map<String, Object>> queryAll() {
+        List<Map<String, Object>> list = jdbcTemplate.queryForList("select * from tb_user");
+        return list;
+    }
+
+    // 新增一条记录
+    @GetMapping("/users/insert")
+    public Object insert(String name, String password) {
+        if (StringUtils.isEmpty(name) || StringUtils.isEmpty(password)) {
+            return false;
+        }
+        jdbcTemplate.execute("insert into tb_user(`name`,`password`) value (\"" + name + "\",\"" + password + "\")");
+        return true;
+    }
+}
+```
+
+两个方法，分别取查询数据库记录和新增数据库记录
+
+功能验证
+
+
+
+下面我们对整个功能进行验证。
+
+#### 启动 Spring Boot 项目
+
+由于默认是在 project 目录下，因此想要启动咱们的项目，首先需要切换到 lou-springboot 目录下，之后可以通过 Maven 插件的方式启动 Spring Boot 项目，命令为 `mvn spring-boot:run` ，之后就可以等待项目启动。
+
+#### 打开 Web 服务
+
+在项目启动成功后，可以点击页面上方的 Web 服务直接在显示查看网站效果。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10302timestamp1552984595724.png)
+
+之后会在浏览器中弹出 `https://********.simplelab.cn` 页面，我们可以在浏览器中输入如下地址进行验证：
+
+- 新增：http://****\**\***.simplelab.cn/users/insert?name=shiyanlou1&password=syl123
+- 查询：https://****\**\***.simplelab.cn/users/queryAll
+
+**注意：以上 url 地址星号部分需要按照你的 web 服务地址进行修改。**
+
+如果能够正常获取到记录以及正确向 tb_user 表中新增记录就表示功能整合成功！结果如下所示：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10302timestamp1552984612148.png)
+
+#### 验证 MySQL 中的数据
+
+最后，我们登录实验楼演示环境中的 MySQL 数据库，查看表中的数据是否与前一步骤中的数据一致，过程如下：
+
+1. **打开命令行工具**
+2. **登录数据库**
+
+```bash
+sudo mysql -u root
+```
+
+1. **查看数据库(这一步可以忽略，主要是确认 lou_springboot 是否已经创建)**
+
+```mysql
+show databases;
+```
+
+1. **切换数据库**
+
+```mysql
+use lou_springboot;
+```
+
+1. **查询 tb_user 表中数据。**
+
+```mysql
+select * from tb_user;
+```
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10302timestamp1552984681496.png)
+
+最后得到的数据确实与 web 页面中看到的数据一致，功能一切正常，本次实验到此结束！
+
+在 Spring Boot 项目中操作数据库，仅仅需要几行配置代码即可完成数据库的连接操作，并不需要多余的设置，再加上 Spring Boot 自动配置了 JdbcTemplate 对象，开发者可以直接上手进行数据库的相关开发工作。 希望大家对于 Spring Boot 的自动配置以及 Spring Boot 项目进行数据库操作有了更好的认识，作为知识的补充和拓展，接下来的文章中我们也会讲解 Spring Boot 与 ORM 框架的整合实践，也希望大家能够在课后自行学习源码并根据文中的 SQL 实践进行练习，代码也需要多写，这样的话进步才会更加明显。
+
+## SpringBoot整合MyBatis操作数据库
+
+MyBatis 简介
+
+MyBatis 的前身是 Apache 社区的一个开源项目 iBatis，于 2010 年更名为 MyBatis。MyBatis 是支持定制化 SQL、存储过程以及高级映射的优秀的持久层框架，避免了几乎所有的 JDBC 代码和手动设置参数以及获取结果集，使得开发人员更加关注 SQL 本身和业务逻辑，不用再去花费时间关注整个复杂的 JDBC 操作过程。
+
+MyBatis 的优点如下：
+
+- 封装了 JDBC 大部分操作，减少开发人员工作量；
+- 相比一些自动化的 ORM 框架，“半自动化”使得开发人员可以自由的编写 SQL 语句，灵活度更高；
+- Java 代码与 SQL 语句分离，降低维护难度；
+- 自动映射结果集，减少重复的编码工作；
+- 开源社区十分活跃，文档齐全，学习成本不高。
+
+虽然前文中已经介绍了 JdbcTemplate 的自动配置及使用，鉴于 MyBatis 框架受众更广且后续实践课程的技术选型包含 MyBatis，因此会在本章节内容中对它做一个详细的介绍，以及如何使用 Spring Boot 整合 MyBatis 框架对数据层进行功能开发。
+
+#### mybatis-springboot-starter 介绍
+
+Spring Boot 的核心特性包括简化配置并快速开发，当我们需要整合某一个功能时，只需要引入其特定的场景启动器 ( starter ) 即可，比如 web 模块整合、jdbc 模块整合，我们在开发时只需要在 pom.xml 文件中引入对应的场景依赖即可。Spring 官方并没有提供 MyBatis 的场景启动器，但是 MyBatis 官方却紧紧的抱住了 Spring 的大腿，他们提供了 MyBatis 整合 Spring Boot 项目时的场景启动器，也就是 **mybatis-springboot-starter**，大家通过命名方式也能够发现其中的区别，Spring 官方提供的启动器的命名方式为 **spring-boot-starter-\***，与它还是有一些差别的，接下来我们来介绍一下 **mybatis-springboot-starter** 场景启动器。
+
+其官网地址为 [mybatis-spring-boot](http://www.mybatis.org/spring-boot-starter/mybatis-spring-boot-autoconfigure/index.html)，感兴趣的朋友可以去查看更多内容，官网对 **mybatis-springboot-starter** 的介绍如下所示：
+
+```bash
+The MyBatis-Spring-Boot-Starter help you build quickly MyBatis applications on top of the Spring Boot.
+```
+
+MyBatis-Spring-Boot-Starter 可以帮助开发者快速创建基于 Spring Boot 的 MyBatis 应用程序，那么使用 **MyBatis-Spring-Boot-Starter**可以做什么呢？
+
+- 构建独立的 MyBatis 应用程序
+- 零模板
+- 更少的 XML 配置代码甚至无 XML 配置
+
+Spring Boot 整合 MyBatis 过程
+
+
+
+接下来，我们还是通过一个案例来理解。
+
+源码下载并解压：
+
+```bash
+wget https://labfile.oss.aliyuncs.com/courses/1367/lou-springboot-08.zip
+unzip lou-springboot-08.zip
+```
+
+切换工作空间到 lou-springboot。项目结构目录如下：
+
+```bash
+lou-spring-boot
+├── pom.xml
+├── README.md
+└── src
+    ├── main
+    │   ├── java
+    │   │   └── com
+    │   │       └── lou
+    │   │           └── springboot
+    │   │               ├── Application.java
+    │   │               ├── controller
+    │   │               │   ├── HelloController.java
+    │   │               │   ├── JdbcController.java
+    │   │               │   └── MyBatisController.java
+    │   │               ├── dao
+    │   │               │   └── UserDao.java
+    │   │               └── entity
+    │   │                   └── User.java
+    │   └── resources
+    │       ├── application.properties
+    │       ├── mapper
+    │       │   └── UserDao.xml
+    │       └── templates
+    └── test
+        └── java
+            └── com
+                └── lou
+                    └── springboot
+                        └── ApplicationTests.java
+```
+
+
+如果要将其整合到当前项目中，首先我们需要将其依赖配置增加到 pom.xml 文件中，mybatis-springboot-starter 的最新版本为 1.3.2，需要 Spring Boot 版本达到 1.5 或者以上版本，同时，我们需要将数据源依赖和 jdbc 依赖也添加到配置文件中(如果不添加的话，将会使用默认数据源和 jdbc 配置)，由于前文中已经将这些配置放入 pom.xml 配置文件中，因此只需要将 mybatis-springboot-starter 依赖放入其中即可，更新后的 pom 文件如下：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>2.1.0.RELEASE</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.lou.springboot</groupId>
+    <artifactId>springboot-demo</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>springboot-demo</name>
+    <description>Demo project for Spring Boot</description>
+    <properties>
+        <java.version>1.8</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <!-- 引入 MyBatis 场景启动器，包含其自动配置类及 MyBatis 3 相关依赖 -->
+        <dependency>
+            <groupId>org.mybatis.spring.boot</groupId>
+            <artifactId>mybatis-spring-boot-starter</artifactId>
+            <version>1.3.2</version>
+        </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+这样，MyBatis 的场景启动器也整合进来项目中了。
+
+#### application.properties 配置
+
+Spring Boot 整合 MyBatis 时几个比较需要注意的配置参数：
+
+- **mybatis.config-location**
+
+  配置 mybatis-config.xml 路径，mybatis-config.xml 中配置 MyBatis 基础属性，如果项目中配置了 mybatis-config.xml 文件需要设置该参数
+
+- **mybatis.mapper-locations**
+
+  配置 Mapper 文件对应的 XML 文件路径
+
+- **mybatis.type-aliases-package**
+
+  配置项目中实体类包路径
+
+```xml
+mybatis.config-location=classpath:mybatis-config.xml
+mybatis.mapper-locations=classpath:mapper/*Dao.xml
+mybatis.type-aliases-package=com.lou.springboot.entity
+```
+
+我们只配置 mapper-locations 即可，最终的 application.properties 文件如下：
+
+```properties
+# datasource config
+spring.datasource.url=jdbc:mysql://localhost:3306/lou_springboot?useUnicode=true&characterEncoding=utf8&autoReconnect=true&useSSL=false
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.datasource.username=root
+spring.datasource.password=
+
+mybatis.mapper-locations=classpath:mapper/*Dao.xml
+```
+
+#### 创建 Mapper 接口的映射文件
+
+在 resources/mapper 目录下新建 Mapper 接口的映射文件 UserDao.xml，之后进行映射文件的编写。
+
+1. 首先，定义映射文件与 Mapper 接口的对应关系，比如该示例中，需要将 UserDao.xml 的与对应的 UserDao 接口类之间的关系定义出来：
+
+   ```xml
+       <mapper namespace="com.lou.springboot.dao.UserDao">
+   ```
+
+2. 之后，配置表结构和实体类的对应关系：
+
+   ```xml
+       <resultMap type="com.lou.springboot.entity.User" id="UserResult">
+           <result property="id" column="id"/>
+           <result property="name" column="name"/>
+           <result property="password" column="password"/>
+       </resultMap>
+   ```
+
+3. 最后，针对对应的接口方法，编写具体的 SQL 语句，最终的 UserDao.xml 文件如下：
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+       <mapper namespace="com.lou.springboot.dao.UserDao">
+       <resultMap type="com.lou.springboot.entity.User" id="UserResult">
+           <result property="id" column="id"/>
+           <result property="name" column="name"/>
+           <result property="password" column="password"/>
+       </resultMap>
+       <select id="findAllUsers" resultMap="UserResult">
+           select id,name,password from tb_user
+           order by id desc
+       </select>
+       <insert id="insertUser" parameterType="com.lou.springboot.entity.User">
+           insert into tb_user(name,password)
+           values(#{name},#{password})
+       </insert>
+       <update id="updUser" parameterType="com.lou.springboot.entity.User">
+           update tb_user
+           set
+           name=#{name},password=#{password}
+           where id=#{id}
+       </update>
+       <delete id="delUser" parameterType="int">
+           delete from tb_user where id=#{id}
+       </delete>
+   </mapper>
+   ```
+
+新建 MyBatisController
+
+
+
+为了对 MyBatis 进行功能测试，在 controller 包下新建 MyBatisController 类，并新增 4 个方法分别接收对于 tb_user 表的增删改查请求，代码如下：
+
+```java
+package com.lou.springboot.controller;
+
+import com.lou.springboot.dao.UserDao;
+import com.lou.springboot.entity.User;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.annotation.Resource;
+import java.util.List;
+import java.util.Map;
+
+@RestController
+public class MyBatisController {
+
+    @Resource
+    UserDao userDao;
+
+    // 查询所有记录
+    @GetMapping("/users/mybatis/queryAll")
+    public List<User> queryAll() {
+        return userDao.findAllUsers();
+    }
+
+    // 新增一条记录
+    @GetMapping("/users/mybatis/insert")
+    public Boolean insert(String name, String password) {
+        if (StringUtils.isEmpty(name) || StringUtils.isEmpty(password)) {
+            return false;
+        }
+        User user = new User();
+        user.setName(name);
+        user.setPassword(password);
+        return userDao.insertUser(user) > 0;
+    }
+
+    // 修改一条记录
+    @GetMapping("/users/mybatis/update")
+    public Boolean insert(Integer id, String name, String password) {
+        if (id == null || id < 1 || StringUtils.isEmpty(name) || StringUtils.isEmpty(password)) {
+            return false;
+        }
+        User user = new User();
+        user.setId(id);
+        user.setName(name);
+        user.setPassword(password);
+        return userDao.updUser(user) > 0;
+    }
+
+    // 删除一条记录
+    @GetMapping("/users/mybatis/delete")
+    public Boolean insert(Integer id) {
+        if (id == null || id < 1) {
+            return false;
+        }
+        return userDao.delUser(id) > 0;
+    }
+}
+```
+
+功能测试
+
+
+
+#### 启动 MySQL
+
+**如果 MySQL 数据库服务没有启动的话需要进行这一步操作。**
+
+进入实验楼线上开发环境，首先打开一个命令窗口，点击 File -> Open New Terminal 即可，之后在命令行中输入以下命令：
+
+```bash
+sudo service mysql start
+```
+
+因为用户权限的关系，需要增加在命令前增加 sudo 取得 root 权限，不然在启动时会报错，之后等待 MySQL 正常启动即可。
+
+打开 Web 服务
+
+
+
+在项目启动成功后，可以点击页面上方的 Web 服务直接在显示查看网站效果。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10304timestamp1552985958532.png)
+
+之后会在浏览器中弹出 `https://********.simplelab.cn` 页面，我们可以在浏览器地址栏中地址后面添加如下地址进行验证：
+
+- 查询：/users/mybatis/queryAll
+- 新增：/users/mybatis/insert?name=mybatis1&password=1233333
+- 修改：/users/mybatis/update?id=3&name=mybatis2&password=1233222
+- 删除：/users/mybatis/delete?id=3
+
+如果能够正常获取到记录以及正确向 tb_user 表中新增和修改记录就表示功能整合成功！结果如下所示：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10304timestamp1552985976344.png)
+
+## Mybatis-Generator自动生成代码
+
+#### MyBatis-Generator 介绍
+
+MyBatis Generator 是 MyBatis 官方提供的代码生成器插件，可以用于 MyBatis 和 iBatis 框架的代码生成，支持所有版本的 MyBatis 框架以及 2.2.0 版本及以上的 iBatis 框架。
+
+在前文中我们也介绍了如何使用 MyBatis 进行数据库操作，在进行功能开发时，一张表我们需要编写实体类、DAO 接口类以及 Mapper 文件，这些是必不可少的文件，如果表的数量较大，我们就需要重复的去创建实体类、Mapper 文件以及 DAO 类并且需要配置它们之间的依赖关系，这无疑是一个很麻烦的事情，而 MyBatis Generator 插件就可以帮助我们去完成这些开发步骤，使用该插件可以帮助开发者自动去创建实体类、Mapper 文件以及 DAO 类并且配置好它们之间的依赖关系，我们可以直接在项目中使用这些代码，后续只需要关注业务方法的开发即可。
+
+为什么要使用 MyBatis-Generator
+
+
+
+通过介绍我们可以将 MyBatis-Generator 简单的理解为一个 MyBatis 框架的代码生成器，至于我推荐大家使用它的原因，理由整理如下：
+
+- 减少重复工作
+- 减少人为操作带来的错误
+- 提升开发效率
+- 使用灵活
+
+MyBatis 属于半自动 ORM 框架，在使用这个框架中，工作量最大的就是书写 Mapper 及相关映射文件，同时需要配置其依赖关系，由于手动书写很容易出错，我们可以利用 MyBatis-Generator 来帮我们自动生成文件。
+
+其次，一个项目通常有很多张表，比如接下来要开发的 my_blog 项目，所有的实体类、SQL 语句都要手动编写，这是一个比较繁琐的过程，如果有这么一个插件能够适当的减少我们的一些工作量，自动将这些代码生成到对应的项目目录中，将是一件十分幸福的事情，当然，该插件生成的代码都是常用的一些增删改查代码，如果有其他功能或方法依然需要自己去编写代码，它只是一个提升效率的工具，给予开发者一定程度的帮助。
+
+#### 添加依赖
+
+
+
+如果要使用该插件，首先我们需要将其依赖配置增加到 pom.xml 文件中，增加的配置文件如下，将该部分配置放到原 pom.xml 文件的 plugins 节点下即可：
+
+```xml
+    <plugin>
+        <groupId>org.mybatis.generator</groupId>
+        <artifactId>mybatis-generator-maven-plugin</artifactId>
+        <version>1.3.5</version>
+        <dependencies>
+            <dependency>
+                <groupId> mysql</groupId>
+                <artifactId>mysql-connector-java</artifactId>
+                <version> 5.1.39</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mybatis.generator</groupId>
+                <artifactId>mybatis-generator-core</artifactId>
+                <version>1.3.5</version>
+            </dependency>
+        </dependencies>
+        <executions>
+            <execution>
+                <id>Generate MyBatis Artifacts</id>
+                <phase>package</phase>
+                <goals>
+                    <goal>generate</goal>
+                </goals>
+            </execution>
+        </executions>
+        <configuration>
+            <verbose>true</verbose>
+            <!-- 是否覆盖 -->
+            <overwrite>true</overwrite>
+            <!-- MybatisGenerator的配置文件位置 -->
+            <configurationFile>src/main/resources/mybatisGeneratorConfig.xml</configurationFile>
+        </configuration>
+    </plugin>
+```
+
+如果是在本地开发的话，接下来等待 jar 包及相关依赖下载完成即可。
+
+#### 生成代码
+
+
+
+配置文件和表结构都处理完成后就可以进行代码生成步骤了，这里整理了两种方式来进行代码生成：
+
+- 方式一：IDEA 工具中的 Maven 插件中含有 mybatis-generator 的选项，点击 generate 即可，如下图所示：
+
+  ![图片描述](https://doc.shiyanlou.com/courses/uid987099-20190729-1564370253441)
+
+- 方式二：执行 mvn 如下命令来进行代码生成，这是不通过开发工具提供的图形界面来进行的步骤。
+
+  ```bash
+  mvn mybatis-generator:generate
+  ```
+
+执行这些步骤之后就可以看到实体类、DAO 接口类、Mapper 文件已经生成在对应的目录中了，接下来我们会进行演示。
+
+
+
+####  DAO 接口注册至 IOC 容器
+
+接下来是最后一个步骤，在代码生成后，我们需要在 DAO 接口类上增加 `@Mapper` 注解，将其注册到 Spring 的 IOC 容器中以供其他类调用，在生成的文件中默认是没有这个注解的，
+
+或者是在主类中添加 `@MapperScan` 注解将相应包下的所有 Mapper 接口扫描到容器中。
+
+```java
+@RunWith(SpringRunner.class)
+@SpringBootTest
+@MapperScan("com.lou.springboot.dao")
+public class DaoTest {
+```
+
+
+
+创建数据库和表结构
+
+
+
+首先，执行如下命令登陆 MySQL 数据库：
+
+```bash
+sudo mysql -u root
+```
+
+因为实验楼线上实验环境中 MySQL 数据库默认并没有设置密码，因此以上命令即可完成登陆，登陆后执行如下命令创建表：
+
+```sql
+USE lou_springboot;
+/*Table structure for table `generator_test` */
+CREATE TABLE `generator_test` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT 'id',
+  `test` varchar(100) NOT NULL COMMENT '测试字段',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+```
+
+如果不存在我们本节课所需的 lou_springboot 数据库，则需要参照前面的实验将数据库建好。
+
+总结
+
+
+
+至此，MyBatis-Generator 插件整合完成，也生成了对应的代码，接下来在项目开发时，我们都会使用它来生成我们 DAO 层的代码，之后再根据功能对 Mapper 文件进行修改，使用该插件时的注意事项如下：
+
+- 由于数据库连接信息是单独定义在配置文件中的，所以在使用时一定要仔细检查，确保数据库连接正常。
+- 在生成代码后，建议将 table 标签注释掉，不然在打包或者生成其他表的代码时会将原先已经生成的代码覆盖，可能会造成一些小麻烦。
+- 代码生成后将 DAO 接口注册至 IOC 容器以供业务方法调用。
+
+## Spring Boot 中的事务处理
+
+前面几篇文章主要讲解了在 Spring Boot 项目中对数据层的操作，本章节将介绍在 Spring Boot 项目中如何进行事务处理。所有的数据访问技术都离不开事务处理，否则将会造成数据不一致，在目前企业级应用开发中，事务管理是必不可少的。
+
+- 数据库事务介绍
+- 声明式事务
+- Spring Boot 处理数据库事务
+
+#### 数据库事务简介
+
+数据库事务是指作为单个逻辑工作单元执行的一系列操作，要么完全地执行，要么完全地不执行。 事务处理可以确保除非事务性单元内的所有操作都成功完成，否则不会永久更新面向数据的资源。
+
+通过将一组相关操作组合为一个要么全部成功要么全部失败的单元，可以简化错误恢复并使应用程序更加可靠。一个逻辑工作单元要成为事务，必须满足所谓的 ACID（原子性、一致性、隔离性和持久性）属性，事务是数据库运行中的逻辑工作单位，由数据库中的事务管理子系统负责事务的处理。
+
+
+
+#### Spring Boot 事务机制
+
+**首先需要明确的一点是 Spring Boot 事务机制实质上就是 Spring 的事务机制**，是采用统一的机制处理来自不同数据访问技术的事务处理，只不过 Spring Boot 基于自动配置的特性作了部分处理来节省开发者的配置工作，这一知识点我们会结合部分源码进行讲解。
+
+Spring 事务管理分两种方式：
+
+- 编程式事务，指的是通过编码方式实现事务；
+- 声明式事务，基于 AOP，将具体业务逻辑与事务处理解耦。
+
+#### 声明式事务
+
+声明式事务是建立在 AOP 机制之上的，其本质是对方法前后进行拦截，然后在目标方法开始之前创建或者加入一个事务，在执行完目标方法之后根据执行情况提交或者回滚事务。
+
+声明式事务最大的优点，就是通过 AOP 机制将具体业务逻辑与事务处理解耦，不需要通过编程的方式管理事务，这样就不需要在业务逻辑代码中掺杂事务管理的代码，因此在实际使用中声明式事务用的比较多。
+
+声明式事务有两种方式：一种是在 XML 配置文件中做相关的事务规则声明；另一种是基于 `@Transactional` 注解的方式（`@Transactional` 注解是来自 `org.springframework.transaction.annotation` 包），便可以将事务规则应用到业务逻辑中。
+
+#### 未使用 Spring Boot 时的事务配置
+
+下面这个配置文件是普通的 SSM 框架整合时的事务配置，相信大家都比较熟悉这段配置代码：
+
+```xml
+    <!-- 事务管理 -->
+    <bean id="transactionManager"
+          class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+        <property name="dataSource" ref="dataSource"/>
+    </bean>
+
+    <!-- 配置事务通知属性 -->
+    <tx:advice id="txAdvice" transaction-manager="transactionManager">
+        <!-- 定义事务传播属性 -->
+        <tx:attributes>
+            <tx:method name="insert*" propagation="REQUIRED"/>
+            <tx:method name="import*" propagation="REQUIRED"/>
+            <tx:method name="update*" propagation="REQUIRED"/>
+            <tx:method name="upd*" propagation="REQUIRED"/>
+            <tx:method name="add*" propagation="REQUIRED"/>
+            <tx:method name="set*" propagation="REQUIRED"/>
+            <tx:method name="remove*" propagation="REQUIRED"/>
+            <tx:method name="delete*" propagation="REQUIRED"/>
+            <tx:method name="get*" propagation="REQUIRED" read-only="true"/>
+            <tx:method name="*" propagation="REQUIRED" read-only="true"/>
+        </tx:attributes>
+    </tx:advice>
+
+    <!-- 配置事务切面 -->
+    <aop:config>
+        <aop:pointcut id="serviceOperation"
+                      expression="(execution(* com.ssm.demo.service.*.*(..)))"/>
+        <aop:advisor advice-ref="txAdvice" pointcut-ref="serviceOperation"/>
+    </aop:config>
+```
+
+通过这段代码我们也能够看出声明式事务的配置过程：
+
+1. 配置事务管理器
+2. 配置事务通知属性
+3. 配置事务切面
+
+这样配置后，相关方法在执行时都被纳入事务管理下了，一旦发生异常，事务会正确回滚。
+
+
+
+#### Spring Boot 项目中的事务控制
+
+在 SpringBoot 中，建议采用注解 `@Transactional` 进行事务的控制，只需要在需要进行事务管理的方法或者类上添加 `@Transactional` 注解即可，接下来我们来通过代码讲解。
+
+下载源码并解压：
+
+```bash
+wget https://labfile.oss.aliyuncs.com/courses/1367/lou-springboot-10.zip
+unzip lou-springboot-10.zip
+```
+
+切换工作空间到 lou-springboot。项目结构目录如下：
+
+```bash
+lou-springboot
+├── pom.xml
+├── README.md
+└── src
+    ├── main
+    │   ├── java
+    │   │   └── com
+    │   │       └── lou
+    │   │           └── springboot
+    │   │               ├── Application.java
+    │   │               ├── controller
+    │   │               │   ├── HelloController.java
+    │   │               │   ├── JdbcController.java
+    │   │               │   ├── MyBatisController.java
+    │   │               │   └── TransactionTestController.java
+    │   │               ├── dao
+    │   │               │   └── UserDao.java
+    │   │               ├── entity
+    │   │               │   └── User.java
+    │   │               └── service
+    │   │                   └── TransactionTestService.java
+    │   └── resources
+    │       ├── application.properties
+    │       ├── mapper
+    │       │   └── UserDao.xml
+    │       └── templates
+    └── test
+        └── java
+            └── com
+                └── lou
+                    └── springboot
+                        └── ApplicationTests.java
+```
+
+
+
+新建 TransactionTestService.java
+
+首先新建 service 包作为业务代码包，事务处理一般在 service 层做，当然在 controller 层中处理也可以，但是建议还是在业务层进行处理，之后在包中新建 TransactionTestService 类，代码如下：
+
+```java
+package com.lou.springboot.service;
+import com.lou.springboot.dao.UserDao;
+import com.lou.springboot.entity.User;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import javax.annotation.Resource;
+
+@Service
+public class TransactionTestService {
+    @Resource
+    UserDao userDao;
+
+    public Boolean test1() {
+        User user = new User();
+        user.setPassword("test1-password");
+        user.setName("test1");
+        // 在数据库表中新增一条记录
+        userDao.insertUser(user);
+        // 发生异常
+        System.out.println(1 / 0);
+        return true;
+    }
+
+    @Transactional
+    public Boolean test2() {
+        User user = new User();
+        user.setPassword("test2-password");
+        user.setName("test2");
+        // 在数据库表中新增一条记录
+        userDao.insertUser(user);
+        // 发生异常
+        System.out.println(1 / 0);
+        return true;
+    }
+}
+```
+
+首先在类上添加 `@Service` 将其注册到 IOC 容器中管理，之后注入 UserDao 对象以实现后续的数据层操作，最后实现两个业务方法 `test1()` 和 `test2()`，二者实现类似，只是两个方法添加的用户对象名称和密码字符串不同，且 `test2()` 方法上添加了 `@Transactional` 注解，而 `test1()` 方法上并没有添加，在方法中我们都添加了一句代码，让数字 1 去除以 数字 0，这段代码一定会出现异常，我们用这个来模拟在发生异常时事务处理能否成功。
+
+按照正常理解，在执行 SQL 语句后，一旦发生异常，这次数据库更改一定会被事务进行回滚，正常情况下数据库中会有 `test1` 的数据而没有 `test2` 的数据，因为 `test1()` 方法并没有纳入事务管理中，而 `test2()` 方法由于加上了 `@Transactional` 注解是会被事务管理器处理的，那么接下来我们就来执行两个业务层方法，看看数据库中的数据变化。
+
+新建 TransactionTestController.java
+
+
+
+为了方便在实验楼线上环境进行方法测试，我们还是将方法调用写到 Controller 类中进行线上访问测试，在 controller 包中新建 TransactionTestController.java 类，代码如下：
+
+```java
+package com.lou.springboot.controller;
+import com.lou.springboot.service.TransactionTestService;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ResponseBody;
+import javax.annotation.Resource;
+@Controller
+public class TransactionTestController {
+    @Resource
+    private TransactionTestService transactionTestService;
+    // 事务管理测试
+    @GetMapping("/transactionTest")
+    @ResponseBody
+    public String transactionTest() {
+        // test1 未添加 @Transactional 注解
+        transactionTestService.test1();
+        // test2 添加了 @Transactional 注解
+        transactionTestService.test2();
+        return "请求完成";
+    }
+}
+```
+
+这段代码很简单，就是实现一个控制器方法处理 /transactionTest 请求，方法中会进行业务层 `test1()` 方法和 `test2()` 方法的调用，也就是说在项目启动后一旦访问 /transactionTest 请求就能够看到这次事务处理测试的结果了。
+
+打开 Web 服务
+
+
+
+在项目启动成功后，可以点击页面上方的 Web 服务直接在显示查看网站效果。
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10305timestamp1552986318786.png)
+
+之后会在浏览器中弹出 https://***\**\***.simplelab.cn 页面，我们可以在浏览器中输入 /transactionTest 地址进行验证，最终得到的结果如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10305timestamp1552986335104.png)
+
+这是预期中会返回的数据，因为调用了 `test1()` 方法和 `test2()` 方法肯定会发生异常，之后我们需要去查看 tb_user 表中的数据，访问 /users/mybatis/queryAll 即可查看所有记录，当然也可以直接查看数据库中的记录，最终结果如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid18510labid10305timestamp1552986346820.png)
+
+最终查到的记录与我们之前分析的一样，`test1()` 方法由于没有添加 `@Transactional` 注解，所以在发生异常后事务没有回滚，insert 语句依然起到了作用，而 `test2()` 方法添加了 `@Transactional` 注解，所以在发生异常后事务正常回滚，数据库中并没有 test2 的记录，本次实验到此结束！
+
+
+
+
+
+Spring Boot 事务管理器自动配置
+
+
+
+在讲解声明式事务时，我们提到了声明式事务的配置过程，首先需要配置事务管理器，但是我们在开发时并没有进行该管理器的配置但是事务管理却起到了作用，这是为什么呢？
+
+答案是 Spring Boot 在启动过程中已经将该对象自动配置完成了，所以我们在 Spring Boot 项目中可以直接使用 `@Transactional` 注解来处理事务，感兴趣的同学可以查看源码进行学习，事务管理器的自动配置类如下：
+
+- org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+- org.springframework.boot.autoconfigure.transaction.TransactionAutoConfiguration
+
+可以在你本地开发工具 (IDEA 或者 Eclipse) 中搜索这两个类的源码来看。
+
+
+
+#### @Transactional 事务实现机制
+
+
+
+**@Transactional 不仅可以注解在方法上，也可以注解在类上。当注解在类上时，意味着此类的所有 public 方法都是开启事务的。如果类级别和方法级别同时使用了 @Transactional 注解，则使用在类级别的注解会重载方法级别的注解。**
+
+在应用系统调用声明了 `@Transactional` 的目标方法时，Spring Framework 默认使用 AOP 代理，在代码运行时生成一个代理对象，根据 `@Transactional` 的属性配置信息，这个代理对象决定该声明 `@Transactional` 的目标方法是否由拦截器 TransactionInterceptor 来使用拦截，在 TransactionInterceptor 拦截时，会在目标方法开始执行之前创建并加入事务，并执行目标方法的逻辑, 最后根据执行情况是否出现异常，利用抽象事务管理器 AbstractPlatformTransactionManager 操作数据源 DataSource 提交或回滚事务。
+
+实验总结
+
+
+
+由于 Spring Boot 的自动配置机制，我们在使用 Spring Boot 开发项目时如果需要进行事务处理，直接在对应方法上添加 `@Transactional` 即可，Spring Boot 事务机制实质上就是 Spring 的事务机制，只不过在配置方式上有所不同，Spring Boot 更简便一些，所以只要你对事务处理有一定的理解，那么在使用 Spring Boot 处理事务时也不会遇到问题。
+
+## 项目实践之 Ajax 技术使用教程
+
+由于我们本次实践教程是一个 web 项目，因此会介绍在 web 项目中前后端交互的方式，我们通常选择的方案是在浏览器端通过使用 Ajax 技术调用后端提供的 api 接口来完成异步请求和页面的交互更新，接下来我们来介绍一下什么是 Ajax 以及如何在项目中使用 Ajax 进行功能开发。
+
+#### Ajax 简介
+
+
+
+AJAX = Asynchronous JavaScript and XML（异步的 JavaScript 和 XML），它是一种用于创建快速动态网页的技术，通过浏览器与服务器进行少量数据交换，Ajax 可以使网页实现异步更新，这意味着可以在不重新加载整个网页的情况下，对网页的某部分进行更新，传统的网页如果需要更新内容，必须要进行跳转并重新加载整个网页。
+
+Ajax 技术使得网站与用户间有了更友好的交互效果，比较常见的借助 Ajax 技术实现的功能有列表上拉加载分页数据、省市区三级联动、进度条更新等等，这些都是借助 Ajax 技术在当前页面即可完成的功能，即使有数据交互也不会跳转页面，整体交互效果有了很大的提升。
+
+
+
+
+
+Ajax 工作流程
+
+
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid441493labid8432timestamp1550025745383.png)
+
+Ajax 的整个工作流程如上图所示，用户在进行页面上进行操作时会执行 js 方法，js 方法中通过 Ajax 异步与后端进行数据交互。首先会创建 XMLHttpRequest 对象，XMLHttpRequest 是 AJAX 的基础，之后会根据页面内容将参数封装到请求体中或者放到请求 URL 中，然后向后端服务器发送请求，请求成功后根据后端返回的数据进行解析和部分逻辑处理，最终在不刷新页面的情况下对页面进行局部更新。
+
+前端页面编码
+
+
+
+在 resources/static 下新建 ajax-test.html，代码如下：
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>lou.SpringBoot | Ajax 请求测试</title>
+  </head>
+  <body class="hold-transition login-page">
+    <div style="width:720px;margin:7% auto">
+      <div class="content">
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-lg-6">
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">接口测试1</h5>
+                </div>
+                <div class="card-body">
+                  <input
+                    type="text"
+                    id="info"
+                    class="form-control"
+                    placeholder="请输入info值"
+                  />
+                  <h6 class="card-title">接口1返回数据如下：</h6>
+                  <p class="card-text" id="test1"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestTest1()"
+                    >发送请求1</a
+                  >
+                </div>
+              </div>
+              <br />
+              <div class="card card-primary card-outline">
+                <div class="card-header">
+                  <h5 class="m-0">接口测试2</h5>
+                </div>
+                <div class="card-body">
+                  <h6 class="card-title">接口2返回数据如下：</h6>
+                  <p class="card-text" id="test2"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestTest2()"
+                    >发送请求2</a
+                  >
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+```
+
+ajax-test 页面上分别定义了两个按钮，在点击时分别会分别触发 `onclick` 点击事件，在点击事件的实现逻辑中进行页面内容的局部更新。
+
+Ajax 调用逻辑
+
+
+
+由于原生 Ajax 实现比较繁琐，实际开发中一般都会使用 jQuery 封装的 Ajax 方法，或者其他库封装的 Ajax 方法，详细可以参考 [jQuery ajax 讲解](http://www.w3school.com.cn/jquery/ajax_ajax.asp)。
+
+在调用前首先在 html 代码中引入 jQuery 库，之后根据点击事件分别定义两个事件触发的 js 方法：`requestTest1()` 和 `requestTest2()`，在方法中分别使用 Ajax 向后端发送请求，在请求成功后将响应结果赋值到对应的 div 中，代码如下：
+
+```html
+<!-- 引入jQuery -->
+<script src="https://cdn.staticfile.org/jquery/1.12.0/jquery.min.js"></script>
+
+<!-- 定义两个点击事件并实现 Ajax 调用逻辑 -->
+<script type="text/javascript">
+  function requestTest1() {
+    var info = $('#info').val();
+    $.ajax({
+      type: 'GET', //方法类型
+      dataType: 'text', //预期服务器返回的数据类型
+      url: 'api/test1?info=' + info, //请求地址
+      contentType: 'application/json; charset=utf-8',
+      success: function (result) {
+        //请求成功后回调
+        $('#test1').html(JSON.stringify(result));
+      },
+      error: function () {
+        //请求失败后回调
+        $('#test1').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+  function requestTest2() {
+    $.ajax({
+      type: 'GET', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: 'api/test2',
+      contentType: 'application/json; charset=utf-8',
+      success: function (result) {
+        $('#test2').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#test2').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+</script>
+```
+
+方法一中会首先获取用户在 input 框中输入的字段，之后将其拼接到请求的 URL 中，最后发送 Ajax 请求并完成回调，方法二中也是类似，用户点击发送请求的按钮后，会触发 `onclick` 点击事件并调用 `requestTest2()` 方法，在请求完成后进入 success 回调方法，并将请求结果的内容放到 div 中显示。
+
+
+
+#### 后端接口实现
+
+在包 `com.lou.springboot.controller` 下新建 RequestTestController，代码如下：
+
+```java
+package com.lou.springboot.controller;
+
+import com.lou.springboot.entity.User;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api")
+public class RequestTestController {
+    @RequestMapping(value = "/test1", method = RequestMethod.GET)
+    public String test1(String info) {
+        if (StringUtils.isEmpty(info) || StringUtils.isEmpty(info)) {
+            return "请输入info的值！";
+        }
+        return "你输入的内容是:" + info;
+    }
+    @RequestMapping(value = "/test2", method = RequestMethod.GET)
+    public List<User> test2() {
+        List<User> users = new ArrayList<>();
+        User user1 = new User();
+        user1.setId(1);
+        user1.setName("十一");
+        user1.setPassword("12121");
+        User user2 = new User();
+        user2.setId(2);
+        user2.setName("十二");
+        user2.setPassword("21212");
+        User user3 = new User();
+        user3.setId(3);
+        user3.setName("十三");
+        user3.setPassword("31313");
+        users.add(user1);
+        users.add(user2);
+        users.add(user3);
+        return users;
+    }
+}
+```
+
+控制器中分别实现两个方法并设置请求地址映射来处理前端发送的异步请求，`test1()` 方法中会根据前端传入的 info 字段值重新返回给前端一个字符串，请求方式为 GET，`test2()`方法中会返回一个集合对象给前端，请求方式为 GET。
+
+在前后端对接时需要确定好请求路径、请求方法、返回结果的格式等，比如后端定义的请求方法为 GET，那么在 Ajax 设置时一定要将 type 设置为 GET，不然无法正常的发起请求，`test1()` 方法和 `test2()` 方法中返回的结果格式也不同，所以在前端进行 Ajax 调用时 dataType 也需要注意，比如本案例中分别返回的是字符串类型和集合类型，那么在 Ajax 请求中需要将 dataType 分别设置为 text 和 json，不然前端在 Ajax 调用后会直接进入 error 回调中，而不是 success 成功回调中。
+
+本篇文章对 Ajax 技术进行了简单的介绍，并通过一个实际的案例讲解了如何在项目开发中使用该技术进行功能实现，同学们可以自行在本地或者实验楼的线上环境中进行测试。
+
+在实际的项目开发中，虽然也会使用 Ajax 技术进行接口调用和异步刷新页面，但是会与本案例有略微的不同，因为在实际的项目开发中会对接口规范和数据格式规范有很强的要求，并不像本案例中所演示的这么简单，我们会在下一个实验中详细介绍，本案例旨在让大家认识该技术并进行简单的使用
+
+## 项目实践之 RESTful API 设计与实现
+
+在实际的项目开发中，进行至接口设计阶段时，后端开发人员和前端开发人员都会参与其中，根据已制定的规范对接口进行设计和返回数据格式的约定（不同项目组规范可能不同），但是像前一个实验中的情况应该不会出现，接口的请求方式不会仅仅只有 GET 方式，返回结果的数据格式反而会比较统一，返回结果一般会进行封装。本篇文章将会对 api 设计及数据规范进行简单的介绍，之后结合实际案例对数据交互进行编码实现。
+
+- RESTful api 设计规范
+- RESTful api 数据规范
+- Ajax + RESTful api 前后端交互实践
+
+#### RESTful api 设计规范
+
+
+
+目前比较流行的一套接口规范就是 RESTful api，REST（Representational State Transfer）,中文翻译叫"表述性状态转移",它首次出现在 2000 年 Roy Fielding 的博士论文中，Roy Fielding 是 HTTP 规范的主要编写者之一。他在论文中提到："我这篇文章的写作目的，就是想在符合架构原理的前提下，理解和评估以网络为基础的应用软件的架构设计，得到一个功能强、性能好、适宜通信的架构。REST 指的是一组架构约束条件和原则。"如果一个架构符合 REST 的约束条件和原则，我们就称它为 RESTful 架构，REST 其实并没有创造新的技术、组件或服务，在我的理解中，它更应该是一种理念、一种思想，利用 Web 的现有特征和能力，更好地诠释和体现现有 web 标准中的一些准则和约束。
+
+#### 基本原则一：URI
+
+- 应该将 api 部署在专用域名之下。
+- URL 中尽量不用大写。
+- URI 中不应该出现动词，动词应该使用 HTTP 方法表示但是如果无法表示，也可使用动词，例如：search 没有对应的 HTTP 方法,可以在路径中使用 search，更加直观。
+- URI 中的名词表示资源集合，使用复数形式。
+- URI 可以包含 queryString，避免层级过深。
+
+#### 基本原则二：HTTP 动词
+
+对于资源的具体操作类型，由 HTTP 动词表示，常用的 HTTP 动词有下面五个：
+
+- GET：从服务器取出资源（一项或多项）。
+- POST：在服务器新建一个资源。
+- PUT：在服务器更新资源（客户端提供改变后的完整资源）。
+- PATCH：在服务器更新资源（客户端提供改变的属性）。
+- DELETE：从服务器删除资源。
+
+还有两个不常用的 HTTP 动词：
+
+- HEAD：获取资源的元数据。
+- OPTIONS：获取信息，关于资源的哪些属性是客户端可以改变的。
+
+例子：
+
+```
+用户管理模块：
+
+1. [POST]   http：//lou.springboot.tech/users   // 新增
+2. [GET]    http：//lou.springboot.tech/users?page=1&rows=10 // 列表查询
+3. [PUT]    http：//lou.springboot.tech/users/12 // 修改
+4. [DELETE] http：//lou.springboot.tech/users/12 // 删除
+```
+
+#### 基本原则三：状态码（Status Codes）
+
+处理请求后，服务端需向客户端返回的状态码和提示信息。
+
+常见状态码**(状态码可自行设计，只需开发者约定好规范即可)**：
+
+- 200：SUCCESS 请求成功。
+- 401：Unauthorized 无权限。
+- 403：Forbidden 禁止访问。
+- 410：Gone 无此资源。
+- 500：INTERNAL SERVER ERROR 服务器发生错误。 ...
+
+#### 基本原则四：错误处理
+
+如果服务器发生错误或者资源不可达，应该向用户返回出错信息。
+
+#### 基本原则五：服务端数据返回
+
+后端的返回结果最好使用 JSON 格式，且格式统一。
+
+#### 基本原则六：版本控制
+
+- 规范的 api 应该包含版本信息，在 RESTful api 中，最简单的包含版本的方法是将版本信息放到 url 中，如：
+
+```
+[GET]    http：//lou.springboot.tech/v1/users?page=1&rows=10
+[PUT]    http：//lou.springboot.tech/v1/users/12
+```
+
+- 另一种做法是，使用 HTTP header 中的 accept 来传递版本信息。
+
+以下为接口安全原则的注意事项：
+
+#### 安全原则一：Authentication 和 Permission
+
+Authentication 指用户认证，Permission 指权限机制，这两点是使 RESTful api 强大、灵活和安全的基本保障。
+
+常用的认证机制是 Basic Auth 和 OAuth，RESTful api 开发中，除非 api 非常简单，且没有潜在的安全性问题，否则，**认证机制是必须实现的**，并应用到 api 中去。Basic Auth 非常简单，很多框架都集成了 Basic Auth 的实现，自己写一个也能很快搞定，OAuth 目前已经成为企业级服务的标配，其相关的开源实现方案非常丰富。
+
+#### 安全原则二：CORS
+
+CORS 即 Cross-origin resource sharing，在 RESTful api 开发中，主要是为 js 服务的，解决调用 RESTful api 时的跨域问题。
+
+由于固有的安全机制，js 的跨域请求时是无法被服务器成功响应的。现在前后端分离日益成为 web 开发主流方式的大趋势下，后台逐渐趋向指提供 api 服务，为各客户端提供数据及相关操作，而网站的开发全部交给前端搞定，网站和 api 服务很少部署在同一台服务器上并使用相同的端口，js 的跨域请求时普遍存在的，开发 RESTful api 时，通常都要考虑到 CORS 功能的实现，以便 js 能正常使用 api。
+
+目前各主流 web 开发语言都有很多优秀的实现 CORS 的开源库，我们在开发 RESTful api 时，要注意 CORS 功能的实现，直接拿现有的轮子来用即可。
+
+
+
+返回结果封装
+
+
+
+在前一个实验中，我们使用了 Ajax 技术进行后端接口的调用，但是返回结果的数据格式并不统一，这在实际的项目开发工作中一般不会出现，因此我们首先将返回结果进行抽象并封装。
+
+新建 common 包，并封装 Result 结果类，代码如下（注：代码位于 com.lou.springboot.common）：
+
+```java
+package com.lou.springboot.common;
+
+import java.io.Serializable;
+
+public class Result<T> implements Serializable {
+    private static final long serialVersionUID = 1L;
+    //业务码，比如成功、失败、权限不足等 code，可自行定义
+    private int resultCode;
+    //返回信息，后端在进行业务处理后返回给前端一个提示信息，可自行定义
+    private String message;
+    //数据结果，泛型，可以是列表、单个对象、数字、布尔值等
+    private T data;
+
+    public Result() {
+    }
+
+    public Result(int resultCode, String message) {
+        this.resultCode = resultCode;
+        this.message = message;
+    }
+    // 省略部分代码
+}
+```
+
+每一次后端数据返回都会根据以上格式进行数据封装，包括业务码、返回信息、实际的数据结果，而不是像前一个实验中的不确定格式，前端接受到该结果后对数据进行解析，并通过业务码进行相应的逻辑操作，之后再将 data 中的数据获取到并进行页面渲染或者进行信息提示。
+
+实际返回的数据格式如下：
+
+- 列表数据
+
+```json
+{
+  "resultCode": 200,
+  "message": "SUCCESS",
+  "data": [
+    {
+      "id": 2,
+      "name": "user1",
+      "password": "123456"
+    },
+    {
+      "id": 1,
+      "name": "13",
+      "password": "12345"
+    }
+  ]
+}
+```
+
+- 单条数据
+
+```json
+{
+  "resultCode": 200,
+  "message": "SUCCESS",
+  "data": true
+}
+```
+
+如上两个分别是列表数据和单条数据的返回，后端进行业务处理后将会返回给前端一串 json 格式的数据，resultCode 等于 200 表示数据请求成功，该字段也可以自行定义，比如 0、1001、500 等等，message 值为 SUCCESS，也可以自行定义返回信息，比如“获取成功”、“列表数据查询成功”等，这些都需要与前端约定好，一个码只表示一种含义，而 data 中的数据可以是一个对象数组、也可以是一个字符串、数字等类型，根据不同的业务返回不同的结果，之后的实践内容里都会以这种方式返回数据。
+
+
+
+#### 后端接口实现
+
+我们会按照 api 规范进行接口设计和接口调用，以对 tb_user 表进行增删改查为例进行实践，在`com.lou.springboot.controller`下新建 `ApiController` 类，代码如下：
+
+```java
+package com.lou.springboot.controller;
+
+import com.lou.springboot.common.Result;
+import com.lou.springboot.common.ResultGenerator;
+import com.lou.springboot.entity.User;
+import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+/**
+ * @author 13
+ * @qq交流群 796794009
+ * @email 2449207463@qq.com
+ * @link http://13blog.site
+ */
+@Controller
+@RequestMapping("/api")
+public class ApiController {
+    static Map<Integer, User> usersMap = Collections.synchronizedMap(new HashMap<Integer, User>());
+
+    // 初始化 usersMap
+    static {
+        User user = new User();
+        user.setId(2);
+        user.setName("user1");
+        user.setPassword("123456");
+        User user2 = new User();
+        user2.setId(5);
+        user2.setName("13-5");
+        user2.setPassword("4");
+        User user3 = new User();
+        user3.setId(6);
+        user3.setName("12");
+        user3.setPassword("123");
+        usersMap.put(2, user);
+        usersMap.put(5, user2);
+        usersMap.put(6, user3);
+    }
+
+    // 查询一条记录
+    @RequestMapping(value = "/users/{id}", method = RequestMethod.GET)
+    @ResponseBody
+    public Result<User> getOne(@PathVariable("id") Integer id) {
+        if (id == null || id < 1) {
+            return ResultGenerator.genFailResult("缺少参数");
+        }
+        User user = usersMap.get(id);
+        if (user == null) {
+            return ResultGenerator.genFailResult("无此数据");
+        }
+        return ResultGenerator.genSuccessResult(user);
+    }
+
+    // 查询所有记录
+    @RequestMapping(value = "/users", method = RequestMethod.GET)
+    @ResponseBody
+    public Result<List<User>> queryAll() {
+        List<User> users = new ArrayList<User>(usersMap.values());
+        return ResultGenerator.genSuccessResult(users);
+    }
+
+    // 新增一条记录
+    @RequestMapping(value = "/users", method = RequestMethod.POST)
+    @ResponseBody
+    public Result<Boolean> insert(@RequestBody User user) {
+        // 参数验证
+        if (StringUtils.isEmpty(user.getId()) || StringUtils.isEmpty(user.getName()) || StringUtils.isEmpty(user.getPassword())) {
+            return ResultGenerator.genFailResult("缺少参数");
+        }
+        if (usersMap.containsKey(user.getId())) {
+            return ResultGenerator.genFailResult("重复的id字段");
+        }
+        usersMap.put(user.getId(), user);
+        return ResultGenerator.genSuccessResult(true);
+    }
+
+    // 修改一条记录
+    @RequestMapping(value = "/users", method = RequestMethod.PUT)
+    @ResponseBody
+    public Result<Boolean> update(@RequestBody User tempUser) {
+        //参数验证
+        if (tempUser.getId() == null || tempUser.getId() < 1 || StringUtils.isEmpty(tempUser.getName()) || StringUtils.isEmpty(tempUser.getPassword())) {
+            return ResultGenerator.genFailResult("缺少参数");
+        }
+        //实体验证，不存在则不继续修改操作
+        User user = usersMap.get(tempUser.getId());
+        if (user == null) {
+            return ResultGenerator.genFailResult("参数异常");
+        }
+        user.setName(tempUser.getName());
+        user.setPassword(tempUser.getPassword());
+        usersMap.put(tempUser.getId(), tempUser);
+        return ResultGenerator.genSuccessResult(true);
+    }
+
+    // 删除一条记录
+    @RequestMapping(value = "/users/{id}", method = RequestMethod.DELETE)
+    @ResponseBody
+    public Result<Boolean> delete(@PathVariable("id") Integer id) {
+        if (id == null || id < 1) {
+            return ResultGenerator.genFailResult("缺少参数");
+        }
+        usersMap.remove(id);
+        return ResultGenerator.genSuccessResult(true);
+    }
+}
+```
+
+根据前端不同的资源请求，我们按照前文中 HTTP 动词的要求对接口的请求类型进行设置，用户数据查询方法使用 GET 请求，用户添加方法 使用 POST 请求，对应的修改和删除操作使用 PUT 和 DELETE 请求，同时对于 api 的请求路径也按照设计规范进行设置，虽然有些映射路径相同，但是会根据请求方法进行区分。
+
+比如：同样是 /users 路径，如果请求方法为 POST 则表示添加资源会调用 insert() 方法，而请求方法为 PUT 时则表示修改资源会调用 update() 方法，还有 /users/{id} 路径，会根据 GET 请求方式和 DELETE 请求方式进行区分表示获取单个资源和删除单个资源。
+
+同时，每一个返回结果我们都统一使用 Result 类进行包装之后再返回给前端，并使用 `@ResponseBody` 注解将其转换为 json 格式。
+
+
+
+
+
+前端页面和 js 方法实现
+
+
+
+接口定义完成后就可以进行前端页面和接口调用逻辑的实现了，新建 api-test.html（注：代码位于`resources/static`），代码如下：
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>lou.SpringBoot | api 请求测试</title>
+  </head>
+  <body class="hold-transition login-page">
+    <div style="width:720px;margin:7% auto">
+      <div class="content">
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-lg-6">
+              <hr />
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">详情查询接口测试</h5>
+                </div>
+                <div class="card-body">
+                  <input
+                    id="queryId"
+                    type="number"
+                    placeholder="请输入id字段"
+                  />
+                  <h6 class="card-title">查询接口返回数据如下：</h6>
+                  <p class="card-text" id="result0"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestQuery()"
+                    >发送详情查询请求</a
+                  >
+                </div>
+              </div>
+              <br />
+              <hr />
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">列表查询接口测试</h5>
+                </div>
+                <div class="card-body">
+                  <h6 class="card-title">查询接口返回数据如下：</h6>
+                  <p class="card-text" id="result1"></p>
+                  <a
+                    href="#"
+                    class="btn btn-primary"
+                    onclick="requestQueryList()"
+                    >发送列表查询请求</a
+                  >
+                </div>
+              </div>
+              <br />
+              <hr />
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">添加接口测试</h5>
+                </div>
+                <div class="card-body">
+                  <input id="addId" type="number" placeholder="请输入id字段" />
+                  <input
+                    id="addName"
+                    type="text"
+                    placeholder="请输入name字段"
+                  />
+                  <input
+                    id="addPassword"
+                    type="text"
+                    placeholder="请输入password字段"
+                  />
+                  <h6 class="card-title">添加接口返回数据如下：</h6>
+                  <p class="card-text" id="result2"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestAdd()"
+                    >发送添加请求</a
+                  >
+                </div>
+              </div>
+              <br />
+              <hr />
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">修改接口测试</h5>
+                </div>
+                <div class="card-body">
+                  <input
+                    id="updateId"
+                    type="number"
+                    placeholder="请输入id字段"
+                  />
+                  <input
+                    id="updateName"
+                    type="text"
+                    placeholder="请输入name字段"
+                  />
+                  <input
+                    id="updatePassword"
+                    type="text"
+                    placeholder="请输入password字段"
+                  />
+                  <h6 class="card-title">修改接口返回数据如下：</h6>
+                  <p class="card-text" id="result3"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestUpdate()"
+                    >发送修改请求</a
+                  >
+                </div>
+              </div>
+              <br />
+              <hr />
+              <div class="card">
+                <div class="card-header">
+                  <h5 class="m-0">删除接口测试</h5>
+                </div>
+                <div class="card-body">
+                  <input
+                    id="deleteId"
+                    type="number"
+                    placeholder="请输入id字段"
+                  />
+                  <h6 class="card-title">删除接口返回数据如下：</h6>
+                  <p class="card-text" id="result4"></p>
+                  <a href="#" class="btn btn-primary" onclick="requestDelete()"
+                    >发送删除请求</a
+                  >
+                </div>
+              </div>
+              <hr />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+```
+
+本功能主要包括对于 tb_user 表增删改查功能的调用和结果显示，每个接口测试模块包括信息录入的 input 框和发送请求按钮以及结果显示的 div，点击不同的按钮分别触发不同的 js 方法，我们计划在 js 方法中使用 Ajax 对后端发送不同的请求，实现如下：
+
+```html
+<!-- jQuery -->
+<script src="https://cdn.staticfile.org/jquery/1.12.0/jquery.min.js"></script>
+<script type="text/javascript">
+  function requestQuery() {
+    var id = $('#queryId').val();
+    if (typeof id == 'undefined' || id == null || id == '' || id < 0) {
+      return false;
+    }
+    $.ajax({
+      type: 'GET', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: '/api/users/' + id,
+      contentType: 'application/json; charset=utf-8',
+      success: function (result) {
+        $('#result0').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#result0').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+  function requestQueryList() {
+    $.ajax({
+      type: 'GET', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: '/api/users',
+      contentType: 'application/json; charset=utf-8',
+      success: function (result) {
+        $('#result1').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#result1').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+  function requestAdd() {
+    var id = $('#addId').val();
+    var name = $('#addName').val();
+    var password = $('#addPassword').val();
+    var data = { id: id, name: name, password: password };
+    $.ajax({
+      type: 'POST', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: '/api/users',
+      contentType: 'application/json; charset=utf-8',
+      data: JSON.stringify(data),
+      success: function (result) {
+        $('#result2').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#result2').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+  function requestUpdate() {
+    var id = $('#updateId').val();
+    var name = $('#updateName').val();
+    var password = $('#updatePassword').val();
+    var data = { id: id, name: name, password: password };
+    $.ajax({
+      type: 'PUT', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: '/api/users',
+      contentType: 'application/json; charset=utf-8',
+      data: JSON.stringify(data),
+      success: function (result) {
+        $('#result3').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#result3').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+  function requestDelete() {
+    var id = $('#deleteId').val();
+    if (typeof id == 'undefined' || id == null || id == '' || id < 0) {
+      return false;
+    }
+    $.ajax({
+      type: 'DELETE', //方法类型
+      dataType: 'json', //预期服务器返回的数据类型
+      url: '/api/users/' + id,
+      contentType: 'application/json; charset=utf-8',
+      success: function (result) {
+        $('#result4').html(JSON.stringify(result));
+      },
+      error: function () {
+        $('#result4').html('接口异常，请联系管理员！');
+      },
+    });
+  }
+</script>
+```
+
+每个请求按钮点击后会触发不同的 js 方法，以修改请求为例，该按钮点击后会触发 `requestUpdate()` 方法，该方法中首先会获取用户输入的数据，之后将其封装到 data 中，同时设置请求的 url 为 /api/users，由于是修改用户数据，因此将请求方法设置为 PUT 方法，之后向后端发送请求，而后端代码在前文中已经介绍，请求地址为 /api/users 且请求方法为 PUT 时会调用修改方法将用户数据进行修改。
+
+删除请求也是如此，首先用户输入一个需要删除的 id，之后根据该 id 将其拼接到 url 中，同时设置请求的 url 为 /api/users/{id}，由于是删除用户数据，因此将请求方法设置为 DELETE 方法，之后向后端发送请求，后端在收到请求后会根据请求方法和请求地址进行映射匹配，可以通过后端代码得知，该请求最终会被控制器中的 `delete()` 方法处理，其它的调用流程与此类似，可以参考着进行理解。
