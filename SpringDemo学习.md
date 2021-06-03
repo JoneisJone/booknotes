@@ -3293,3 +3293,256 @@ public class ApiController {
 每个请求按钮点击后会触发不同的 js 方法，以修改请求为例，该按钮点击后会触发 `requestUpdate()` 方法，该方法中首先会获取用户输入的数据，之后将其封装到 data 中，同时设置请求的 url 为 /api/users，由于是修改用户数据，因此将请求方法设置为 PUT 方法，之后向后端发送请求，而后端代码在前文中已经介绍，请求地址为 /api/users 且请求方法为 PUT 时会调用修改方法将用户数据进行修改。
 
 删除请求也是如此，首先用户输入一个需要删除的 id，之后根据该 id 将其拼接到 url 中，同时设置请求的 url 为 /api/users/{id}，由于是删除用户数据，因此将请求方法设置为 DELETE 方法，之后向后端发送请求，后端在收到请求后会根据请求方法和请求地址进行映射匹配，可以通过后端代码得知，该请求最终会被控制器中的 `delete()` 方法处理，其它的调用流程与此类似，可以参考着进行理解。
+
+
+
+## SpringBoot博客系统项目开发之分页功能实现
+
+在 api 实践那节实验课程中包含一个列表查询接口，但是那个接口会将所有的数据查询出来，一般这种接口会加入分页逻辑，在查询时只查询对应页码的数据，而不是将所有的数据全部都查询出来，本节实验课我们将对分页功能进行介绍及分析，之后进行功能实践，之后还会讲解使用 JqGrid 分页插件进行分页功能的效果展示。
+
+其实分页是一个网站系统中非常重要也十分常用的功能，相信不少同学对这个功能比较熟悉，在 MVC 开发模式下我们通常是把它放入返回对象中并在页面代码中循环遍历并渲染到页面中，也有通过接口返回，并通过前端插件来实现，这两种方式我们都会介绍到，本节实践的内容将其设计为一个通用的分页接口，并将分页数据放到 Result 对象中并通过 json 格式返回。
+
+
+
+#### 分页的作用
+
+不仅仅是常见，分页功能在一个系统中也是不可缺少的，分页功能的作用如下：
+
+- 减少系统资源的消耗，数据查询出来后是放在内存里的，如果在数据量很大的情况下一次性将所有内容都查询出来，会占用过多的内存，通过分页可以减少这种消耗；
+- 提高性能，应用与数据库间通过网络传输数据，一次传输 10 条数据结果集与一次传输 20000 条数据结果集肯定是传输 10 条消耗更少的网络资源；
+- 提升访问速度，浏览器与应用间的传输也是通过网络，返回 10 条数据明显那比返回 20000 条数据速度更快，因为数据包的大小有差别；
+- 符合用户习惯，比如搜索结果或者商品展示，通常用户可能只看最近前 30 条，将所有数据都查询出来比较浪费；
+- 基于展现层面的考虑，由于设备屏幕的大小比较固定，一个屏幕能够展示的信息并不是特别多，如果一次展现太多的数据，不管是排版还是页面美观度都有影响，一个屏幕的范围就是那么大，展示信息条数有限。
+
+分页功能的使用可以提升系统性能，也比较符合用户习惯，符合页面设计，这也是为什么大部分系统都会有分页功能。
+
+#### 分页设计
+
+
+
+##### 分页参数设计
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid441493labid8432timestamp1550026524121.png)
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid441493labid8432timestamp1550026531814.png)
+
+分页信息区的设计和展示如上图所示，前端分页区比较重要的几个信息是：
+
+- 页码展示
+- 当前页码
+- 每页条数
+
+当然，有些页面也会加上首页、尾页、跳转页码等功能，这些信息都根据功能需要和页面设计去做增加和删减。
+
+##### 后端功能设计
+
+前端页面的工作是渲染数据和分页信息展示，而后端则需要按照前端传输过来的请求将分页所需的数据正确的查询出来并返回给前端，两端的侧重点并不相同，比如前端需要展示所有页码，而后端则只需要提供总页数即可，并不需要对这个总页码进行其他操作，比如前端需要根据用户操作记录当前页码这个参数以便对页码信息进行调整和限制，而后端则并不是这么注重当前页码，只需要接收前端传输过来的页码进行相应的判断和查询操作即可。
+
+对于后端必不可少的是两个参数：
+
+- 页码(需要第几页的数据)
+- 每页条数(每次查询多少条数据,一般默认 10 条或者 20 条)
+
+因为数据库查询语句如下，不同数据库可能关键字有些差别，比如 SQL Server 是通过 `top` 关键字、Oracle 通过 `rownum` 关键字，MySQL 实现分页功能基本都是使用 `limit` 关键字。
+
+```sql
+//下面是mysql的实现语句：
+
+select * from tb_xxxx limit 10,20
+```
+
+分页功能的最终实现既是如此，通过页码和条数确定数据库需要查询的是从第几条到第几条的数据，比如查询第 1 页每页 20 条数据就是查询数据库中从 0 到 20 条数据，查询第 4 页每页 10 条数据就是查询数据库中第 30 到 40 条数据，因此对于后端来说页码和条数两个参数就显得特别重要，缺少这两个参数根本无法继续之后的查询逻辑，分页数据也就无从查起。
+
+虽然如此，为了前端分页区展示还要将数据总量或者总页数返回给前端，数据总量是必不可少的，因为总页数可以计算出来，即数据总量除以每页条数，数据总量的获取方式：
+
+```sql
+select count(*) from tb_xxxx
+```
+
+之后将数据封装，并返回给前端即可。
+
+#### 分页功能实践
+
+
+
+接下来我们将结合 tb_admin_user 表进行简单的查询并分页的功能，在前端请求对应的页数时返回那一页的所有数据。 注意：项目统一创建在/home/project/lou-springboot 目录下。
+
+后端分页功能代码
+
+
+
+- AdminUserDao.xml（注：完整代码位于`resources/mapper/AdminUserDao.xml`）
+
+```sql
+    <!-- 查询用户列表 -->
+    <select id="findAdminUsers" parameterType="Map" resultMap="AdminUserResult">
+        select id,user_name,create_time from tb_admin_user
+        where is_deleted=0
+        order by id desc
+        <if test="start!=null and limit!=null">
+            limit #{start},#{limit}
+        </if>
+    </select>
+
+    <!-- 查询用户总数 -->
+    <select id="getTotalAdminUser" parameterType="Map" resultType="int">
+        select count(*) from tb_admin_user
+        where is_deleted=0
+    </select>
+```
+
+- 业务层代码（注：完整代码位于`com.lou.springboot.service.impl.AdminUserServiceImpl`）
+
+```java
+    public PageResult getAdminUserPage(PageUtil pageUtil) {
+        //当前页的用户列表
+        List<AdminUser> users = adminUserDao.findAdminUsers(pageUtil);
+        //用户总数
+        int total = adminUserDao.getTotalAdminUser(pageUtil);
+        //分页信息封装
+        PageResult pageResult = new PageResult(users, total, pageUtil.getLimit(), pageUtil.getPage());
+        return pageResult;
+    }
+```
+
+- 控制层代码（注：完整代码位于`com.lou.springboot.controller.AdminUserControler`）
+
+```java
+@RequestMapping(value = "/list", method = RequestMethod.GET)
+    public Result list(@RequestParam Map<String, Object> params) {
+        //检查参数
+        if (StringUtils.isEmpty(params.get("page")) || StringUtils.isEmpty(params.get("limit"))) {
+            return ResultGenerator.genErrorResult(Constants.RESULT_CODE_PARAM_ERROR, "参数异常！");
+        }
+        //查询列表数据
+        PageUtil pageUtil = new PageUtil(params);
+        return ResultGenerator.genSuccessResult(adminUserService.getAdminUserPage(pageUtil));
+    }
+```
+
+通过后端代码可以看出，分页功能的交互流程是前端将所需页码和条数参数传输给后端，而后端在接受到分页请求后会对分页参数进行计算，并利用 MySQL 的 `limit` 关键字去查询对应的记录，同学们可以结合代码进行理解和学习，由于篇幅所限，这里仅贴出部分代码，详细版本可以直接下载整个工程代码。
+
+JqGrid 分页插件介绍
+
+
+
+JqGrid 是一个用来显示网格数据的 jQuery 插件，通过使用 jqGrid 可以轻松实现前端页面与后台数据的 Ajax 异步通信并实现分页功能，特点如下：
+
+- 兼容目前所有流行的 web 浏览器；
+- 完善强大的分页功能；
+- 支持多种数据格式解析，XML、JSON、数组等形式；
+- 提供丰富的选项配置及方法事件接口；
+- 支持表格排序，支持拖动列、隐藏列；
+- 支持滚动加载数据；
+- 开源免费
+
+[JqGrid in GitHub](https://github.com/tonytomov/jqGrid/tree/master)
+
+[下载地址](https://github.com/tonytomov/jqGrid/releases)
+
+本教程选择的版本为 5.3.0，将代码压缩包解压后可以看到 JqGrid 正式包的目录结构如下：
+
+![此处输入图片的描述](https://doc.shiyanlou.com/document-uid441493labid8432timestamp1550026852832.png)
+
+使用 JqGrid 时必要的文件如下：
+
+```
+## js文件
+jquery.jqGrid.js
+grid.locale-cn.js
+jquery.jqGrid.js
+
+## 样式文件
+ui.jqgrid-bootstrap-ui.css
+ui.jqgrid-bootstrap.css
+ui.jqgrid.css
+```
+
+主要是 js 文件和 css 样式文件，如果想使用 JqGrid 其他特性的话对应的引入其 js 文件即可。
+
+本课程的实战 所有模块的分页插件都是使用 JqGrid 插件实现的，它的分页功能十分强大，而且使用和学习起来都比较简单，JqGrid 还有其他优秀的特性，本系统只使用了其部分特性，感兴趣的朋友可以继续学习其相关知识。
+
+
+
+#### 整合过程
+
+1. 首先在 html 文件中引入 JqGrid 所需文件：
+
+```html
+<link href="plugins/jqgrid-5.3.0/ui.jqgrid-bootstrap4.css" rel="stylesheet" />
+<!-- JqGrid依赖jquery，因此需要先引入jquery.min.js文件 -->
+<script src="plugins/jquery/jquery.min.js"></script>
+
+<script src="plugins/jqgrid-5.3.0/grid.locale-cn.js"></script>
+<script src="plugins/jqgrid-5.3.0/jquery.jqGrid.min.js"></script>
+```
+
+1. 在页面中需要展示分页数据的区域添加如下代码，用于 JqGrid 初始化：
+
+```html
+<!-- JqGrid必要DOM,用于创建表格展示列表数据 -->
+<table id="jqGrid" class="table table-bordered"></table>
+<!-- JqGrid必要DOM,分页信息区域 -->
+<div id="jqGridPager"></div>
+```
+
+1. 调用 JqGrid 分页插件的 jqGrid() 方法渲染分页展示区域，代码如下：
+
+```js
+$('#jqGrid').jqGrid({
+  url: 'users/list', // 请求后台json数据的url
+  datatype: 'json', // 后台返回的数据格式
+  colModel: [
+    // 列表信息：表头 宽度 是否显示 渲染参数 等属性
+    {
+      label: 'id',
+      name: 'id',
+      index: 'id',
+      width: 50,
+      hidden: true,
+      key: true,
+    },
+    {
+      label: '登录名',
+      name: 'userName',
+      index: 'userName',
+      sortable: false,
+      width: 80,
+    },
+    {
+      label: '添加时间',
+      name: 'createTime',
+      index: 'createTime',
+      sortable: false,
+      width: 80,
+    },
+  ],
+  height: 485, // 表格高度  可自行调节
+  rowNum: 10, // 默认一页显示多少条数据 可自行调节
+  rowList: [10, 30, 50], // 翻页控制条中 每页显示记录数可选集合
+  styleUI: 'Bootstrap', // 主题 这里选用的是Bootstrap主题
+  loadtext: '信息读取中...', // 数据加载时显示的提示信息
+  rownumbers: true, // 是否显示行号，默认值是false，不显示
+  rownumWidth: 35, // 行号列的宽度
+  autowidth: true, // 宽度自适应
+  multiselect: true, // 是否可以多选
+  pager: '#jqGridPager', // 分页信息DOM
+  jsonReader: {
+    root: 'data.list', //数据列表模型
+    page: 'data.currPage', //数据页码
+    total: 'data.totalPage', //数据总页码
+    records: 'data.totalCount', //数据总记录数
+  },
+  // 向后台请求的参数
+  prmNames: {
+    page: 'page',
+    rows: 'limit',
+    order: 'order',
+  },
+  // 数据加载完成并且DOM创建完毕之后的回调函数
+  gridComplete: function () {
+    //隐藏grid底部滚动条
+    $('#jqGrid').closest('.ui-jqgrid-bdiv').css({ 'overflow-x': 'hidden' });
+  },
+});
+```
