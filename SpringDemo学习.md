@@ -3546,3 +3546,349 @@ $('#jqGrid').jqGrid({
   },
 });
 ```
+
+
+
+## SpringBoot博客系统项目开发之验证码功能
+
+#### 验证码介绍
+
+谈起验证码这个话题，相信大家都应该很熟悉，在日常上网的时候经常会看到验证码的逻辑设计，比如登陆账号、论坛发帖、购买商品时网站都会要求用户在实际操作之前去输入验证码，验证码的生成规则或者展现形式也各不相同，但是这个设计确实已经存在于各大网站中，以下是百度百科中对它的定义：
+
+> 验证码（CAPTCHA）是“Completely Automated Public Turing test to tell Computers and Humans Apart”（全自动区分计算机和人类的图灵测试）的缩写，是一种区分用户是计算机还是人的公共全自动程序。可以防止：恶意破解密码、刷票、论坛灌水，有效防止某个黑客对某一个特定注册用户用特定程序暴力破解方式进行不断的登陆尝试，实际上用验证码是现在很多网站通行的方式，我们利用比较简易的方式实现了这个功能。这个问题可以由计算机生成并评判，但是必须只有人类才能解答。由于计算机无法解答 CAPTCHA 的问题，所以回答出问题的用户就可以被认为是人类。
+
+
+
+由于在后面的实战项目开发中会用到验证码这个功能，因此选择在这篇教程中进行介绍和功能演示。其实验证码设计的主要目的以及它最大的作用也就是**防止不法分子在短时间内用机器批量的重复操作**。
+
+![图片描述](https://doc.shiyanlou.com/courses/uid987099-20190729-1564371160445)
+
+我们接下来开发的博客网站会在后台登陆以及用户评论功能模块中使用验证码，这样可以有效防止恶意用户对网站进行破坏，实际上是用验证码是现在很多网站通行的方式，虽然会使得某些操作变得麻烦一点，但是对大部分的功能场景来说这个功能还是很有必要，也很重要，所以不要觉得它麻烦，如果增加这样一个功能可以使得网站更加安全，那就是十分值得的。
+
+添加依赖
+
+        <!-- 验证码 -->
+        <dependency>
+            <groupId>com.github.penggle</groupId>
+            <artifactId>kaptcha</artifactId>
+            <version>2.3.2</version>
+        </dependency>
+
+
+
+
+#### 配置
+
+
+
+注册 DefaultKaptcha 到 IOC 容器中，新建 config 包，之后新建 KaptchaConfig 类，内容如下：
+
+```java
+package com.lou.springboot.config;
+
+import com.google.code.kaptcha.impl.DefaultKaptcha;
+import org.springframework.context.annotation.Bean;
+import org.springframework.stereotype.Component;
+import com.google.code.kaptcha.util.Config;
+import java.util.Properties;
+
+@Component
+public class KaptchaConfig {
+    @Bean
+    public DefaultKaptcha getDefaultKaptcha(){
+        com.google.code.kaptcha.impl.DefaultKaptcha defaultKaptcha = new com.google.code.kaptcha.impl.DefaultKaptcha();
+        Properties properties = new Properties();
+        // 图片边框
+        properties.put("kaptcha.border", "no");
+        // 字体颜色
+        properties.put("kaptcha.textproducer.font.color", "black");
+        // 图片宽
+        properties.put("kaptcha.image.width", "160");
+        // 图片高
+        properties.put("kaptcha.image.height", "40");
+        // 字体大小
+        properties.put("kaptcha.textproducer.font.size", "30");
+        // 验证码长度
+        properties.put("kaptcha.textproducer.char.space", "5");
+        // 字体
+        properties.setProperty("kaptcha.textproducer.font.names", "宋体,楷体,微软雅黑");
+        Config config = new Config(properties);
+        defaultKaptcha.setConfig(config);
+        return defaultKaptcha;
+    }
+}
+```
+
+这里就是对生成的图片验证码的规则配置，如颜色、宽高、长度、字体等等，可以根据需求自行修改这些规则，之后就可以生成自己想要的验证码了。
+
+
+
+Spring Boot 整合 kaptcha 的第一步就是增加依赖，首先我们需要将其依赖配置增加到 pom.xml 文件中，此时的 pom.xml 文件内容如下：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>2.1.0.RELEASE</version>
+        <relativePath/>
+    </parent>
+    <groupId>com.lou.springboot</groupId>
+    <artifactId>spring-boot-captcha</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>spring-boot-captcha</name>
+    <description>Demo project for Spring Boot</description>
+    <properties>
+        <java.version>1.8</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- 验证码 -->
+        <dependency>
+            <groupId>com.github.penggle</groupId>
+            <artifactId>kaptcha</artifactId>
+            <version>2.3.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+如果是在本地开发的话，只需要等待 jar 包及相关依赖下载完成即可。
+
+验证码的生成与显示
+
+
+
+#### 后端处理
+
+在 controller 包中新建 KaptchaController，之后注入刚刚配置好的 DefaultKaptcha 类，然后就可以新建一个方法，在方法里可以生成验证码对象，并以图片流的方式写到前端以供显示，代码如下：
+
+```java
+package com.lou.springboot.controller;
+import com.google.code.kaptcha.impl.DefaultKaptcha;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import javax.imageio.ImageIO;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+
+/**
+ * @author 13
+ * @qq交流群 796794009
+ * @email 2449207463@qq.com
+ * @link http://13blog.site
+ */
+@Controller
+public class KaptchaController {
+
+    @Autowired
+    private DefaultKaptcha captchaProducer;
+
+    @GetMapping("/kaptcha")
+    public void defaultKaptcha(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) throws Exception {
+        byte[] captchaOutputStream;
+        ByteArrayOutputStream imgOutputStream = new ByteArrayOutputStream();
+        try {
+            //生产验证码字符串并保存到session中
+            String verifyCode = captchaProducer.createText();
+            httpServletRequest.getSession().setAttribute("verifyCode", verifyCode);
+            BufferedImage challenge = captchaProducer.createImage(verifyCode);
+            ImageIO.write(challenge, "jpg", imgOutputStream);
+        } catch (IllegalArgumentException e) {
+            httpServletResponse.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
+        captchaOutputStream = imgOutputStream.toByteArray();
+        httpServletResponse.setHeader("Cache-Control", "no-store");
+        httpServletResponse.setHeader("Pragma", "no-cache");
+        httpServletResponse.setDateHeader("Expires", 0);
+        httpServletResponse.setContentType("image/jpeg");
+        ServletOutputStream responseOutputStream = httpServletResponse.getOutputStream();
+        responseOutputStream.write(captchaOutputStream);
+        responseOutputStream.flush();
+        responseOutputStream.close();
+    }
+}
+```
+
+我们在控制器中新增了 defaultKaptcha 方法，该方法所拦截处理的路径为 /kaptcha，在前端访问该路径后就可以接收到一个图片流并显示在浏览器页面上。
+
+#### 前端处理
+
+新建 kaptcha.html，在该页面中显示验证码，代码如下：
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>验证码显示</title>
+  </head>
+  <body>
+    <img src="/kaptcha" onclick="this.src='/kaptcha?d='+new Date()*1" />
+  </body>
+</html>
+```
+
+访问后端验证码路径 /kaptcha，并将其返回显示在 img 标签中，之后定义了 `onclick` 方法，在点击该 img 标签时可以动态的切换显示一个新的验证码，点击时访问的路径为 `/kaptcha?d=1565950414611`，即原来的验证码路径后面带上一个时间戳参数，时间戳是会变化的，所以每次点击都会是一个与之前不同的请求，如果不这样处理的话，由于浏览器的机制可能并不会重新发送请求。
+
+
+
+验证码的输入验证
+
+
+
+验证码的显示完成后，我们接下来要做的就是对用户输入的验证码进行比对和验证，因为一般的做法就是后端生成后会对当前生成的验证码进行保存（可能是 session 中、或者缓存中、或者数据库中），之后显示到前端页面，用户在看到验证码之后在页面对应的输入框中填写验证码，之后才向后端发送请求，而后端再接到请求后会对用户输入的验证码进行验证，如果不对的话则不会进行后续操作，接下来我们来简单的实现一下这个流程。
+
+#### 后端处理
+
+在 KaptchaController 类中新增 `verify` 方法，代码如下：
+
+```java
+    @GetMapping("/verify")
+    @ResponseBody
+    public String verify(@RequestParam("code") String code, HttpSession session) {
+        if (StringUtils.isEmpty(code)) {
+            return "验证码不能为空";
+        }
+        String kaptchaCode = session.getAttribute("verifyCode") + "";
+        if (StringUtils.isEmpty(kaptchaCode) || !code.equals(kaptchaCode)) {
+            return "验证码错误";
+        }
+        return "验证成功";
+    }
+```
+
+该方法所拦截处理的路径为 /verify，请求参数为 code，即用户输入的验证码，在进行基本的非空验证后，与之前保存在 session 中的 verifyCode 值进行比较，不同则返回验证码错误，相同则返回验证成功。
+
+#### 前端处理
+
+新建 verify.html，该页面中显示验证码，同时有可以供用户输入验证码的输入框以及提交按钮，代码如下：
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>验证码测试</title>
+  </head>
+  <body>
+    <img src="/kaptcha" onclick="this.src='/kaptcha?d='+new Date()*1" />
+    <input type="text" maxlength="5" id="code" placeholder="请输入验证码" />
+    <button id="verify">验证</button>
+  </body>
+  <script src="jquery.js"></script>
+  <script type="text/javascript">
+    $(function () {
+      $('#verify').click(function () {
+        var code = $('#code').val();
+        $.ajax({
+          type: 'GET', //方法类型
+          url: '/verify?code=' + code,
+          success: function (result) {
+            alert(result);
+          },
+          error: function () {
+            alert('请求失败');
+          },
+        });
+      });
+    });
+  </script>
+</html>
+```
+
+用户在输入框中输入验证码后可以点击“验证”按钮，点击事件触发后执行 js 方法，该方法会获取到用户输入的验证码的值，并将其作为请求参数，之后进行 Ajax 请求，请求后会在弹框中显示后端返回的处理结果。
+
+
+
+## SpringBoot博客系统项目开发之登录模块实现
+
+**从本篇开始将不再进行基础知识的讲解，而是真实的开始去开发一个实践项目了，实践课程的第一篇我们选择讲解两个知识点，一是 AdminLTE3 web app 模板整合，二是登录功能的实现，包括页面和后台 api 的开发。**
+
+在课程介绍时我给出了几张最终项目的预览图，网站的风格比较美观，因为我们最终的实践项目的前端页面就是基于 AdminLTE3 模板进行开发的，本文会简单的介绍这个网页模板并实际的整合进我们的项目中进行登录页面的开发。之后是登录功能的实现，这里说的是互联网范畴的登录，通常供多人使用的网站或程序应用系统为每位用户配置了一套独特的用户名和密码，用户可以使用各自的用户名和密码使用系统，以便系统能识别该用户的身份，从而保持该用户的使用习惯或使用数据，这个功能相信大家都不陌生，我们就把它作为实践课程的第一步吧。
+
+#### 用户登录状态
+
+以我们将要开发的后台管理系统来说，这个管理系统是拥有多个页面的，在页面跳转过程中和通过接口进行数据交互时我们需要知道用户的状态，尤其是用户登录的状态，以便我们知道这是否是一个正常的用户，这个用户是否处于合法的登录状态，这样才能在页面跳转和接口请求时知道是否可以让当前用户来操作一些功能或是获取一些数据。
+
+因此需要在每个页面对用户的身份进行验证和确认，但现实情况是，不可能让用户在每个页面上都输入用户名和密码，这是一个多么反人类的设计啊，应该不会有用户想要去使用这种系统，所以在设计时，要求用户进行一次登录操作即可。为了实现这一功能就需要一些辅助技术，用得最多的技术就是浏览器的 Cookie，而在 Java Web 开发中，用的比较多的是 Session，将用户登录的信息存放其中，这样就可以通过读取 Cookie 或者 Session 中的数据获得用户的登录信息，从而达到记录状态，验证用户这一目的。
+
+#### 登录流程设计
+
+通过前文的叙述也可以得出登录的本质，即身份验证和登录状态的保持，在实际编码中是如何实现的呢？
+
+首先，在数据库中查询这条用户记录，伪代码如下：
+
+```sql
+select * from xxx_user where account_number = 'xxxx';
+```
+
+如果不存在这条记录则表示身份验证失败，登录流程终止；如果存在这条记录，则表示身份验证成功，接下来则需要进行登录状态的存储和验证了，存储伪代码如下：
+
+```java
+//通过 Cookie 存储
+Cookie cookie = new Cookie("userName",xxxxx);
+
+//通过 Session 存储
+session.setAttribute("userName",xxxxx);
+```
+
+验证逻辑的伪代码如下：
+
+```java
+//通过 Cookie 获取需要验证的数据并进行比对校验
+Cookie cookies[] = request.getCookies();
+if (cookies != null){
+    for (int i = 0; i < cookies.length; i++)
+           {
+               Cookie cookie = cookies[i];
+               if (name.equals(cookie.getName()))
+               {
+                    return cookie;
+               }
+           }
+}
+
+//通过session获取需要验证的数据并进行比对校验
+session.getAttribute("userName");
+```
+
+本次实践项目的登录状态我们是通过 session 来保存的，用户登录成功后我们将用户信息放到 session 对象中，之后再实现一个拦截器，在访问项目时判断 session 中是否有用户信息，有则放行请求，没有就跳转到登录页面。
+
+AdminLTE3 模板整合
+
+
+
+整合过程其实是我们把 AdminLTE3 代码压缩包中我们需要的样式文件、js 文件、图片等静态资源放入我们 Spring Boot 项目的静态资源目录下，比如 static 目录或者其他我们设置的静态资源目录，几个重要的文件我们都在下图中用红线进行标注了，目录如下：
+
+![图片描述](https://doc.shiyanlou.com/courses/uid987099-20190729-1564378238928)
+
+有些人可能对“整合”不是很理解，甚至以为是一个很复杂的过程，这里我解释一下，我们开发的是一个 web 项目，项目中包括前端工程和后端工程，后端工程我们是比较熟悉的，而前端工程就包括页面文件、样式文件、js 文件等等，由于后端的小伙伴可能不是特别熟悉前端开发，因此我们就选择了 AdminLTE 网站模板这样一个半成品网站来进行改造和开发，大部分页面和样式都已经由模板作者开发好了，我们只需要针对性的修改一些页面供项目使用即可，这个过程中肯定就少不了要把它的样式文件、js 文件等放到我们项目的静态资源目录中，因此，这里所说的“整合”仅仅是把一些必要的文件复制到我们的项目目录中，希望大家不要把这个过程想复杂了。
